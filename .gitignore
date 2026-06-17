@@ -1,4 +1,5 @@
 /data/leads.json
+/data/templates.json
 /php-server-*.log
 /php-server-*.err
 /node_modules/

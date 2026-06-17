@@ -96,6 +96,25 @@ function normalizePhone(phone) {
     return digits;
 }
 
+function splitMessageParts(message) {
+    return String(message || '')
+        .split(/^\s*---\s*$/m)
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
+function normalizeDelaySeconds(value) {
+    const delay = Number.parseInt(value, 10);
+    if (!Number.isFinite(delay)) {
+        return 3;
+    }
+    return Math.min(Math.max(delay, 0), 30);
+}
+
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 app.get('/status', (req, res) => {
     res.json({
         ok: true,
@@ -114,21 +133,27 @@ app.post('/send', async (req, res) => {
     }
 
     const phone = normalizePhone(req.body.phone);
-    const message = String(req.body.message || '').trim();
+    const messages = splitMessageParts(req.body.message);
+    const delaySeconds = normalizeDelaySeconds(req.body.delaySeconds);
 
     if (!/^60\d{8,11}$/.test(phone)) {
         res.status(422).json({ ok: false, error: 'Invalid Malaysia phone number.' });
         return;
     }
 
-    if (message === '') {
+    if (messages.length === 0) {
         res.status(422).json({ ok: false, error: 'Message is required.' });
         return;
     }
 
     try {
-        await client.sendMessage(`${phone}@c.us`, message);
-        res.json({ ok: true });
+        for (const [index, message] of messages.entries()) {
+            if (index > 0 && delaySeconds > 0) {
+                await wait(delaySeconds * 1000);
+            }
+            await client.sendMessage(`${phone}@c.us`, message);
+        }
+        res.json({ ok: true, sent: messages.length });
     } catch (error) {
         res.status(500).json({
             ok: false,

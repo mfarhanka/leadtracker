@@ -4,6 +4,7 @@ declare(strict_types=1);
 $appName = 'LeadTracker';
 $dataDir = __DIR__ . DIRECTORY_SEPARATOR . 'data';
 $dataFile = $dataDir . DIRECTORY_SEPARATOR . 'leads.json';
+$templatesFile = $dataDir . DIRECTORY_SEPARATOR . 'templates.json';
 
 if (!is_dir($dataDir)) {
     mkdir($dataDir, 0775, true);
@@ -27,6 +28,42 @@ function load_leads(string $file): array
 function save_leads(string $file, array $leads): void
 {
     file_put_contents($file, json_encode(array_values($leads), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
+
+function load_templates(string $file): array
+{
+    if (!file_exists($file)) {
+        return [];
+    }
+
+    $contents = file_get_contents($file);
+    if ($contents === false || trim($contents) === '') {
+        return [];
+    }
+
+    $data = json_decode($contents, true);
+    return is_array($data) ? $data : [];
+}
+
+function save_templates(string $file, array $templates): void
+{
+    file_put_contents($file, json_encode(array_values($templates), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
+
+function seed_templates(array $templates): array
+{
+    if ($templates !== []) {
+        return $templates;
+    }
+
+    return [[
+        'id' => 'default-job-application',
+        'name' => 'Job Application Follow-up',
+        'body' => default_message_template(),
+        'delay_seconds' => 3,
+        'created_at' => date('c'),
+        'updated_at' => date('c'),
+    ]];
 }
 
 function normalize_phone(string $phone): string
@@ -74,17 +111,61 @@ function clean_url(string $url): string
 
 function build_message(array $lead): string
 {
+    $template = trim((string)($lead['message_template'] ?? ''));
+    if ($template !== '') {
+        return render_message_template($template, $lead);
+    }
+
+    return render_message_template(default_message_template(), $lead);
+}
+
+function default_message_template(): string
+{
+    return implode("\n", [
+        'Hi {company}, saya berminat nak tanya tentang kerja yang diiklankan.',
+        '',
+        'Saya jumpa iklan ini: {ad_link}',
+        '---',
+        'Boleh saya tahu masih ada kekosongan dan bagaimana cara untuk apply?',
+        'Terima kasih.',
+    ]);
+}
+
+function render_message_template(string $template, array $lead): string
+{
     $company = trim((string)($lead['company'] ?? ''));
     $adLink = trim((string)($lead['ad_link'] ?? ''));
 
-    $lines = [
-        'Hi' . ($company !== '' ? " {$company}" : '') . ', saya berminat nak tanya tentang kerja yang diiklankan.',
-        $adLink !== '' ? 'Saya jumpa iklan ini: ' . $adLink : '',
-        'Boleh saya tahu masih ada kekosongan dan bagaimana cara untuk apply?',
-        'Terima kasih.',
-    ];
+    $message = strtr($template, [
+        '{company}' => $company,
+        '{ad_link}' => $adLink,
+        '{phone}' => (string)($lead['phone'] ?? ''),
+        '{source}' => (string)($lead['source'] ?? ''),
+    ]);
 
-    return implode("\n", array_filter($lines, static fn (string $line): bool => trim($line) !== ''));
+    $lines = preg_split('/\R/', $message) ?: [];
+    return implode("\n", array_filter($lines, static function (string $line) use ($adLink): bool {
+        return trim($line) !== 'Saya jumpa iklan ini:' || $adLink !== '';
+    }));
+}
+
+function split_message_parts(string $message): array
+{
+    $parts = preg_split('/^\s*---\s*$/m', $message) ?: [];
+    return array_values(array_filter(array_map('trim', $parts), static fn (string $part): bool => $part !== ''));
+}
+
+function normalize_delay_seconds($value): int
+{
+    $delay = filter_var($value, FILTER_VALIDATE_INT, [
+        'options' => [
+            'default' => 3,
+            'min_range' => 0,
+            'max_range' => 30,
+        ],
+    ]);
+
+    return is_int($delay) ? $delay : 3;
 }
 
 function find_duplicate(array $leads, string $phone, string $adLink, ?string $ignoreId = null): ?array
@@ -94,7 +175,7 @@ function find_duplicate(array $leads, string $phone, string $adLink, ?string $ig
             continue;
         }
 
-        $samePhone = ($lead['phone'] ?? '') === $phone;
+        $samePhone = $phone !== '' && ($lead['phone'] ?? '') === $phone;
         $sameAd = $adLink !== '' && strcasecmp((string)($lead['ad_link'] ?? ''), $adLink) === 0;
 
         if ($samePhone || $sameAd) {
@@ -108,10 +189,17 @@ function find_duplicate(array $leads, string $phone, string $adLink, ?string $ig
 function bridge_request(string $path, string $method = 'GET', ?array $payload = null): array
 {
     $url = 'http://127.0.0.1:3030' . $path;
+    $timeout = 8;
+    if ($payload !== null && isset($payload['message'])) {
+        $messageCount = max(1, count(split_message_parts((string)$payload['message'])));
+        $delaySeconds = normalize_delay_seconds($payload['delaySeconds'] ?? 3);
+        $timeout += (($messageCount - 1) * $delaySeconds) + 5;
+    }
+
     $options = [
         'http' => [
             'method' => $method,
-            'timeout' => 8,
+            'timeout' => $timeout,
             'ignore_errors' => true,
             'header' => "Accept: application/json\r\n",
         ],
@@ -136,8 +224,14 @@ function bridge_request(string $path, string $method = 'GET', ?array $payload = 
 }
 
 $leads = load_leads($dataFile);
+$templates = load_templates($templatesFile);
+if (!file_exists($templatesFile)) {
+    $templates = seed_templates($templates);
+    save_templates($templatesFile, $templates);
+}
 $flash = null;
 $errors = [];
+$templateErrors = [];
 $editing = null;
 
 if (isset($_GET['api'])) {
@@ -160,6 +254,7 @@ if (isset($_GET['api'])) {
         $result = bridge_request('/send', 'POST', [
             'phone' => normalize_phone((string)($payload['phone'] ?? '')),
             'message' => (string)($payload['message'] ?? ''),
+            'delaySeconds' => normalize_delay_seconds($payload['delaySeconds'] ?? 3),
         ]);
 
         if (($result['ok'] ?? false) !== true) {
@@ -177,6 +272,59 @@ if (isset($_GET['api'])) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? 'save';
+
+    if ($action === 'save_template') {
+        $templateId = trim((string)($_POST['template_id'] ?? ''));
+        $templateName = trim((string)($_POST['template_name'] ?? ''));
+        $templateBody = trim((string)($_POST['template_body'] ?? ''));
+        $templateDelaySeconds = normalize_delay_seconds($_POST['template_delay_seconds'] ?? 3);
+
+        if ($templateName === '') {
+            $templateErrors[] = 'Template name is required.';
+        }
+
+        if ($templateBody === '') {
+            $templateErrors[] = 'Template message is required.';
+        }
+
+        if ($templateErrors === []) {
+            $now = date('c');
+            $template = [
+                'id' => $templateId !== '' ? $templateId : bin2hex(random_bytes(8)),
+                'name' => $templateName,
+                'body' => $templateBody,
+                'delay_seconds' => $templateDelaySeconds,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            $updated = false;
+            foreach ($templates as $index => $existingTemplate) {
+                if (($existingTemplate['id'] ?? '') === $template['id']) {
+                    $template['created_at'] = $existingTemplate['created_at'] ?? $now;
+                    $templates[$index] = $template;
+                    $updated = true;
+                    break;
+                }
+            }
+
+            if (!$updated) {
+                $templates[] = $template;
+            }
+
+            save_templates($templatesFile, $templates);
+            header('Location: index.php?template_saved=1');
+            exit;
+        }
+    }
+
+    if ($action === 'delete_template') {
+        $templateId = (string)($_POST['template_id'] ?? '');
+        $templates = array_values(array_filter($templates, static fn (array $template): bool => ($template['id'] ?? '') !== $templateId));
+        save_templates($templatesFile, $templates);
+        header('Location: index.php?template_deleted=1');
+        exit;
+    }
 
     if ($action === 'delete') {
         $id = (string)($_POST['id'] ?? '');
@@ -202,62 +350,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    $id = trim((string)($_POST['id'] ?? ''));
-    $company = trim((string)($_POST['company'] ?? ''));
-    $phone = normalize_phone((string)($_POST['phone'] ?? ''));
-    $adLink = clean_url((string)($_POST['ad_link'] ?? ''));
-    $source = trim((string)($_POST['source'] ?? ''));
-    $status = trim((string)($_POST['status'] ?? 'New'));
-    $notes = trim((string)($_POST['notes'] ?? ''));
+    if ($action === 'save') {
+        $id = trim((string)($_POST['id'] ?? ''));
+        $company = trim((string)($_POST['company'] ?? ''));
+        $phone = normalize_phone((string)($_POST['phone'] ?? ''));
+        $rawAdLink = trim((string)($_POST['ad_link'] ?? ''));
+        $adLink = clean_url($rawAdLink);
+        $source = trim((string)($_POST['source'] ?? ''));
+        $status = trim((string)($_POST['status'] ?? 'New'));
+        $notes = trim((string)($_POST['notes'] ?? ''));
+        $messageTemplate = trim((string)($_POST['message_template'] ?? ''));
+        $messageDelaySeconds = normalize_delay_seconds($_POST['message_delay_seconds'] ?? 3);
 
-    if ($company === '') {
-        $errors[] = 'Company name is required.';
-    }
+        if ($phone !== '' && !preg_match('/^60\d{8,11}$/', $phone)) {
+            $errors[] = 'Phone number must be a valid Malaysia format, for example 60107744530.';
+        }
 
-    if (!preg_match('/^60\d{8,11}$/', $phone)) {
-        $errors[] = 'Phone number must be a valid Malaysia format, for example 60107744530.';
-    }
+        if ($rawAdLink !== '' && $adLink === '') {
+            $errors[] = 'Ad link must be a valid URL.';
+        }
 
-    if ($adLink === '') {
-        $errors[] = 'A valid ad link is required.';
-    }
+        $duplicate = find_duplicate($leads, $phone, $adLink, $id !== '' ? $id : null);
+        if ($duplicate !== null) {
+            $errors[] = 'Possible duplicate: ' . ($duplicate['company'] ?? 'existing lead') . ' already uses this phone number or ad link.';
+        }
 
-    $duplicate = find_duplicate($leads, $phone, $adLink, $id !== '' ? $id : null);
-    if ($duplicate !== null) {
-        $errors[] = 'Possible duplicate: ' . ($duplicate['company'] ?? 'existing lead') . ' already uses this phone number or ad link.';
-    }
+        if ($errors === []) {
+            $now = date('c');
+            $lead = [
+                'id' => $id !== '' ? $id : bin2hex(random_bytes(8)),
+                'company' => $company,
+                'phone' => $phone,
+                'ad_link' => $adLink,
+                'source' => $source !== '' ? $source : 'Other',
+                'status' => $status !== '' ? $status : 'New',
+                'notes' => $notes,
+                'message_template' => $messageTemplate !== '' ? $messageTemplate : default_message_template(),
+                'message_delay_seconds' => $messageDelaySeconds,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
 
-    if ($errors === []) {
-        $now = date('c');
-        $lead = [
-            'id' => $id !== '' ? $id : bin2hex(random_bytes(8)),
-            'company' => $company,
-            'phone' => $phone,
-            'ad_link' => $adLink,
-            'source' => $source !== '' ? $source : 'Other',
-            'status' => $status !== '' ? $status : 'New',
-            'notes' => $notes,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ];
-
-        $updated = false;
-        foreach ($leads as $index => $existing) {
-            if (($existing['id'] ?? '') === $lead['id']) {
-                $lead['created_at'] = $existing['created_at'] ?? $now;
-                $leads[$index] = $lead;
-                $updated = true;
-                break;
+            $updated = false;
+            foreach ($leads as $index => $existing) {
+                if (($existing['id'] ?? '') === $lead['id']) {
+                    $lead['created_at'] = $existing['created_at'] ?? $now;
+                    $leads[$index] = $lead;
+                    $updated = true;
+                    break;
+                }
             }
-        }
 
-        if (!$updated) {
-            $leads[] = $lead;
-        }
+            if (!$updated) {
+                $leads[] = $lead;
+            }
 
-        save_leads($dataFile, $leads);
-        header('Location: index.php?saved=1');
-        exit;
+            save_leads($dataFile, $leads);
+            header('Location: index.php?saved=1');
+            exit;
+        }
     }
 }
 
@@ -276,6 +427,12 @@ if (isset($_GET['saved'])) {
 }
 if (isset($_GET['deleted'])) {
     $flash = 'Lead deleted.';
+}
+if (isset($_GET['template_saved'])) {
+    $flash = 'Template saved.';
+}
+if (isset($_GET['template_deleted'])) {
+    $flash = 'Template deleted.';
 }
 
 $query = trim((string)($_GET['q'] ?? ''));
@@ -310,11 +467,21 @@ $form = [
     'source' => $editing['source'] ?? ($_POST['source'] ?? 'Mudah.my'),
     'status' => $editing['status'] ?? ($_POST['status'] ?? 'New'),
     'notes' => $editing['notes'] ?? ($_POST['notes'] ?? ''),
+    'message_template' => $editing['message_template'] ?? ($_POST['message_template'] ?? default_message_template()),
+    'message_delay_seconds' => $editing['message_delay_seconds'] ?? ($_POST['message_delay_seconds'] ?? 3),
+];
+
+$templateForm = [
+    'id' => $_POST['template_id'] ?? '',
+    'name' => $_POST['template_name'] ?? '',
+    'body' => $_POST['template_body'] ?? default_message_template(),
+    'delay_seconds' => $_POST['template_delay_seconds'] ?? 3,
 ];
 
 $statuses = ['New', 'WhatsApp Sent', 'Replied', 'Applied', 'Rejected', 'No Response'];
 $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
 $shouldOpenLeadModal = $editing !== null || $errors !== [];
+$shouldOpenTemplateModal = $templateErrors !== [];
 $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
 ?>
 <!doctype html>
@@ -324,7 +491,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= htmlspecialchars($appName) ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="assets/app.css" rel="stylesheet">
+    <link href="assets/app.css?v=3" rel="stylesheet">
 </head>
 <body>
 <nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top">
@@ -348,6 +515,17 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
             <strong>Please check:</strong>
             <ul class="mb-0">
                 <?php foreach ($errors as $error): ?>
+                    <li><?= htmlspecialchars($error) ?></li>
+                <?php endforeach; ?>
+            </ul>
+        </div>
+    <?php endif; ?>
+
+    <?php if ($templateErrors !== []): ?>
+        <div class="alert alert-danger">
+            <strong>Please check the template:</strong>
+            <ul class="mb-0">
+                <?php foreach ($templateErrors as $error): ?>
                     <li><?= htmlspecialchars($error) ?></li>
                 <?php endforeach; ?>
             </ul>
@@ -381,11 +559,12 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                         <div class="text-secondary small">
                             <?= count($filteredLeads) ?> shown
                             <?php if ($activeFilterCount > 0): ?>
-                                · <?= $activeFilterCount ?> active filter<?= $activeFilterCount === 1 ? '' : 's' ?>
+                                &middot; <?= $activeFilterCount ?> active filter<?= $activeFilterCount === 1 ? '' : 's' ?>
                             <?php endif; ?>
                         </div>
                     </div>
                     <div class="d-flex gap-2">
+                        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#templatesModal">Templates</button>
                         <button class="btn btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#filterModal">Filter</button>
                         <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#leadModal">Add Lead</button>
                     </div>
@@ -403,28 +582,47 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                 <?php foreach ($filteredLeads as $lead): ?>
                     <?php
                     $message = build_message($lead);
-                    $waUrl = 'https://web.whatsapp.com/send?phone=' . rawurlencode((string)$lead['phone']) . '&text=' . rawurlencode($message);
+                    $messageParts = split_message_parts($message);
+                    $messageDelaySeconds = normalize_delay_seconds($lead['message_delay_seconds'] ?? 3);
+                    $phone = (string)($lead['phone'] ?? '');
+                    $adLink = (string)($lead['ad_link'] ?? '');
+                    $companyName = trim((string)($lead['company'] ?? '')) !== '' ? (string)$lead['company'] : 'Untitled lead';
+                    $waUrl = 'https://web.whatsapp.com/send?phone=' . rawurlencode($phone) . '&text=' . rawurlencode($message);
                     ?>
                     <article class="lead-card">
                         <div class="d-flex flex-column flex-lg-row gap-3 justify-content-between">
                             <div class="min-w-0">
                                 <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                                    <h2 class="h5 mb-0 text-truncate"><?= htmlspecialchars((string)$lead['company']) ?></h2>
+                                    <h2 class="h5 mb-0 text-truncate"><?= htmlspecialchars($companyName) ?></h2>
                                     <span class="badge text-bg-light border"><?= htmlspecialchars((string)$lead['source']) ?></span>
                                     <span class="badge status-badge"><?= htmlspecialchars((string)$lead['status']) ?></span>
                                 </div>
-                                <div class="small text-secondary mb-2"><?= htmlspecialchars(format_phone((string)$lead['phone'])) ?></div>
-                                <a class="ad-link" href="<?= htmlspecialchars((string)$lead['ad_link']) ?>" target="_blank" rel="noopener"><?= htmlspecialchars((string)$lead['ad_link']) ?></a>
+                                <?php if ($phone !== ''): ?>
+                                    <div class="small text-secondary mb-2"><?= htmlspecialchars(format_phone($phone)) ?></div>
+                                <?php endif; ?>
+                                <?php if ($adLink !== ''): ?>
+                                    <a class="ad-link" href="<?= htmlspecialchars($adLink) ?>" target="_blank" rel="noopener"><?= htmlspecialchars($adLink) ?></a>
+                                <?php endif; ?>
                                 <?php if (trim((string)$lead['notes']) !== ''): ?>
                                     <p class="notes mb-0 mt-2"><?= nl2br(htmlspecialchars((string)$lead['notes'])) ?></p>
                                 <?php endif; ?>
+                                <div class="small text-secondary mt-2">
+                                    <?= count($messageParts) ?> message<?= count($messageParts) === 1 ? '' : 's' ?>
+                                    <?php if (count($messageParts) > 1): ?>
+                                        &middot; <?= $messageDelaySeconds ?>s apart
+                                    <?php endif; ?>
+                                </div>
                             </div>
 
                             <div class="actions">
-                                <button class="btn btn-success" type="button" data-send-whatsapp="<?= htmlspecialchars($waUrl) ?>" data-lead-id="<?= htmlspecialchars((string)$lead['id']) ?>" data-phone="<?= htmlspecialchars((string)$lead['phone']) ?>" data-message="<?= htmlspecialchars($message) ?>">Send WhatsApp</button>
+                                <?php if ($phone !== ''): ?>
+                                    <button class="btn btn-success" type="button" data-send-whatsapp="<?= htmlspecialchars($waUrl) ?>" data-lead-id="<?= htmlspecialchars((string)$lead['id']) ?>" data-phone="<?= htmlspecialchars($phone) ?>" data-message="<?= htmlspecialchars($message) ?>" data-delay-seconds="<?= $messageDelaySeconds ?>">Send WhatsApp</button>
+                                <?php else: ?>
+                                    <button class="btn btn-success" type="button" disabled>No WhatsApp</button>
+                                <?php endif; ?>
                                 <button class="btn btn-outline-secondary" type="button" data-template="<?= htmlspecialchars($message) ?>">Copy Template</button>
                                 <a class="btn btn-outline-primary" href="index.php?edit=<?= urlencode((string)$lead['id']) ?>">Edit</a>
-                                <button class="btn btn-outline-danger" type="button" data-delete-lead="<?= htmlspecialchars((string)$lead['id']) ?>" data-delete-name="<?= htmlspecialchars((string)$lead['company']) ?>" data-bs-toggle="modal" data-bs-target="#deleteModal">Delete</button>
+                                <button class="btn btn-outline-danger" type="button" data-delete-lead="<?= htmlspecialchars((string)$lead['id']) ?>" data-delete-name="<?= htmlspecialchars($companyName) ?>" data-bs-toggle="modal" data-bs-target="#deleteModal">Delete</button>
                             </div>
                         </div>
                     </article>
@@ -453,18 +651,18 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                     <div class="vstack gap-3">
                         <div>
                             <label class="form-label" for="company">Company / Contact Name</label>
-                            <input class="form-control" id="company" name="company" value="<?= htmlspecialchars((string)$form['company']) ?>" required autocomplete="organization">
+                            <input class="form-control" id="company" name="company" value="<?= htmlspecialchars((string)$form['company']) ?>" autocomplete="organization">
                         </div>
 
                         <div>
                             <label class="form-label" for="phone">WhatsApp Number</label>
-                            <input class="form-control" id="phone" name="phone" value="<?= htmlspecialchars((string)$form['phone']) ?>" placeholder="60107744530" required inputmode="tel" autocomplete="tel">
+                            <input class="form-control" id="phone" name="phone" value="<?= htmlspecialchars((string)$form['phone']) ?>" placeholder="60107744530" inputmode="tel" autocomplete="tel">
                             <div class="form-text">Accepts 0107744530, +60107744530, or 60107744530. Saved as 60 format.</div>
                         </div>
 
                         <div>
                             <label class="form-label" for="ad_link">Ad Link</label>
-                            <input class="form-control" id="ad_link" name="ad_link" value="<?= htmlspecialchars((string)$form['ad_link']) ?>" placeholder="https://..." required inputmode="url">
+                            <input class="form-control" id="ad_link" name="ad_link" value="<?= htmlspecialchars((string)$form['ad_link']) ?>" placeholder="https://..." inputmode="url">
                         </div>
 
                         <div class="row g-3">
@@ -490,6 +688,28 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                             <label class="form-label" for="notes">Notes</label>
                             <textarea class="form-control" id="notes" name="notes" rows="3" placeholder="Role, salary, location, follow-up..."><?= htmlspecialchars((string)$form['notes']) ?></textarea>
                         </div>
+
+                        <div>
+                            <label class="form-label" for="message_template">Message Template</label>
+                            <select class="form-select mb-2" id="template_picker">
+                                <option value="">Custom message</option>
+                                <?php foreach ($templates as $template): ?>
+                                    <option
+                                        value="<?= htmlspecialchars((string)($template['id'] ?? '')) ?>"
+                                        data-template-delay="<?= normalize_delay_seconds($template['delay_seconds'] ?? 3) ?>"
+                                    >
+                                        <?= htmlspecialchars((string)($template['name'] ?? 'Untitled Template')) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <textarea class="form-control" id="message_template" name="message_template" rows="7"><?= htmlspecialchars((string)$form['message_template']) ?></textarea>
+                            <div class="form-text">Use {company}, {ad_link}, {phone}, or {source}. Put --- on its own line to send the next part as a separate message.</div>
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label" for="message_delay_seconds">Seconds Between Messages</label>
+                            <input class="form-control" id="message_delay_seconds" name="message_delay_seconds" type="number" min="0" max="30" step="1" value="<?= htmlspecialchars((string)$form['message_delay_seconds']) ?>">
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -501,6 +721,84 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                     <button class="btn btn-primary" type="submit"><?= $editing ? 'Update Lead' : 'Save Lead' ?></button>
                 </div>
             </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="templatesModal" tabindex="-1" aria-labelledby="templatesModalTitle" aria-hidden="true" data-open-on-load="<?= $shouldOpenTemplateModal ? 'true' : 'false' ?>">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title h5" id="templatesModalTitle">Message Templates</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-4">
+                    <div class="col-12 col-lg-5">
+                        <form method="post" class="template-editor" id="templateForm" data-default-template="<?= htmlspecialchars(default_message_template()) ?>">
+                            <input type="hidden" name="action" value="save_template">
+                            <input type="hidden" name="template_id" id="template_id" value="<?= htmlspecialchars((string)$templateForm['id']) ?>">
+
+                            <div class="vstack gap-3">
+                                <div>
+                                    <label class="form-label" for="template_name">Template Name</label>
+                                    <input class="form-control" id="template_name" name="template_name" value="<?= htmlspecialchars((string)$templateForm['name']) ?>" placeholder="Mudah job inquiry">
+                                </div>
+
+                                <div>
+                                    <label class="form-label" for="template_body">Message</label>
+                                    <textarea class="form-control" id="template_body" name="template_body" rows="9"><?= htmlspecialchars((string)$templateForm['body']) ?></textarea>
+                                    <div class="form-text">Use {company}, {ad_link}, {phone}, or {source}. Put --- on its own line to send the next part separately.</div>
+                                </div>
+
+                                <div>
+                                    <label class="form-label" for="template_delay_seconds">Seconds Between Messages</label>
+                                    <input class="form-control" id="template_delay_seconds" name="template_delay_seconds" type="number" min="0" max="30" step="1" value="<?= htmlspecialchars((string)$templateForm['delay_seconds']) ?>">
+                                </div>
+
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-primary" type="submit">Save Template</button>
+                                    <button class="btn btn-outline-secondary" type="button" id="newTemplateButton">New</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div class="col-12 col-lg-7">
+                        <div class="template-list">
+                            <?php foreach ($templates as $template): ?>
+                                <?php
+                                $templateName = (string)($template['name'] ?? 'Untitled Template');
+                                $templateBody = (string)($template['body'] ?? '');
+                                $templateDelay = normalize_delay_seconds($template['delay_seconds'] ?? 3);
+                                $templateParts = split_message_parts($templateBody);
+                                ?>
+                                <div class="template-row">
+                                    <div class="min-w-0">
+                                        <div class="fw-semibold text-truncate"><?= htmlspecialchars($templateName) ?></div>
+                                        <div class="small text-secondary mb-2"><?= count($templateParts) ?> message<?= count($templateParts) === 1 ? '' : 's' ?> &middot; <?= $templateDelay ?>s apart</div>
+                                        <pre class="template-preview mb-0"><?= htmlspecialchars($templateBody) ?></pre>
+                                    </div>
+                                    <div class="template-actions">
+                                        <button
+                                            class="btn btn-outline-primary btn-sm"
+                                            type="button"
+                                            data-edit-template
+                                            data-template-id="<?= htmlspecialchars((string)($template['id'] ?? '')) ?>"
+                                            data-template-delay="<?= $templateDelay ?>"
+                                        >Edit</button>
+                                        <form method="post" data-delete-template-form>
+                                            <input type="hidden" name="action" value="delete_template">
+                                            <input type="hidden" name="template_id" value="<?= htmlspecialchars((string)($template['id'] ?? '')) ?>">
+                                            <button class="btn btn-outline-danger btn-sm" type="submit">Delete</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -568,6 +866,14 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="assets/app.js?v=3"></script>
+<script type="application/json" id="templateData"><?= json_encode(array_map(static function (array $template): array {
+    return [
+        'id' => (string)($template['id'] ?? ''),
+        'name' => (string)($template['name'] ?? 'Untitled Template'),
+        'body' => (string)($template['body'] ?? ''),
+        'delay_seconds' => normalize_delay_seconds($template['delay_seconds'] ?? 3),
+    ];
+}, $templates), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) ?></script>
+<script src="assets/app.js?v=5"></script>
 </body>
 </html>

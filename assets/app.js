@@ -1,9 +1,29 @@
 const phoneInput = document.querySelector('#phone');
 let waReady = false;
+const templates = loadTemplates();
+
+function loadTemplates() {
+    const data = document.querySelector('#templateData');
+    if (!data) {
+        return new Map();
+    }
+
+    try {
+        const parsed = JSON.parse(data.textContent || '[]');
+        return new Map(parsed.map((template) => [String(template.id || ''), template]));
+    } catch (error) {
+        return new Map();
+    }
+}
 
 const leadModalElement = document.querySelector('#leadModal');
 if (leadModalElement?.dataset.openOnLoad === 'true' && window.bootstrap) {
     bootstrap.Modal.getOrCreateInstance(leadModalElement).show();
+}
+
+const templatesModalElement = document.querySelector('#templatesModal');
+if (templatesModalElement?.dataset.openOnLoad === 'true' && window.bootstrap) {
+    bootstrap.Modal.getOrCreateInstance(templatesModalElement).show();
 }
 
 function normalizePhone(value) {
@@ -30,6 +50,90 @@ if (phoneInput) {
     });
 }
 
+const templatePicker = document.querySelector('#template_picker');
+if (templatePicker) {
+    templatePicker.addEventListener('change', () => {
+        const option = templatePicker.selectedOptions[0];
+        if (!option || option.value === '') {
+            return;
+        }
+
+        const messageTemplate = document.querySelector('#message_template');
+        const delayInput = document.querySelector('#message_delay_seconds');
+        const template = templates.get(option.value);
+
+        if (messageTemplate) {
+            messageTemplate.value = template?.body || option.dataset.templateBody || '';
+        }
+
+        if (delayInput) {
+            delayInput.value = String(template?.delay_seconds ?? option.dataset.templateDelay ?? '3');
+        }
+    });
+}
+
+document.querySelectorAll('[data-edit-template]').forEach((button) => {
+    button.addEventListener('click', () => {
+        const templateId = document.querySelector('#template_id');
+        const templateName = document.querySelector('#template_name');
+        const templateBody = document.querySelector('#template_body');
+        const templateDelay = document.querySelector('#template_delay_seconds');
+        const template = templates.get(button.dataset.templateId || '');
+
+        if (templateId) {
+            templateId.value = button.dataset.templateId || '';
+        }
+
+        if (templateName) {
+            templateName.value = template?.name || button.dataset.templateName || '';
+        }
+
+        if (templateBody) {
+            templateBody.value = template?.body || button.dataset.templateBody || '';
+        }
+
+        if (templateDelay) {
+            templateDelay.value = String(template?.delay_seconds ?? button.dataset.templateDelay ?? '3');
+        }
+    });
+});
+
+const newTemplateButton = document.querySelector('#newTemplateButton');
+if (newTemplateButton) {
+    newTemplateButton.addEventListener('click', () => {
+        const templateForm = document.querySelector('#templateForm');
+        const templateId = document.querySelector('#template_id');
+        const templateName = document.querySelector('#template_name');
+        const templateBody = document.querySelector('#template_body');
+        const templateDelay = document.querySelector('#template_delay_seconds');
+
+        if (templateId) {
+            templateId.value = '';
+        }
+
+        if (templateName) {
+            templateName.value = '';
+            templateName.focus();
+        }
+
+        if (templateBody) {
+            templateBody.value = templateForm?.dataset.defaultTemplate || '';
+        }
+
+        if (templateDelay) {
+            templateDelay.value = '3';
+        }
+    });
+}
+
+document.querySelectorAll('[data-delete-template-form]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+        if (!window.confirm('Delete this template?')) {
+            event.preventDefault();
+        }
+    });
+});
+
 document.querySelectorAll('[data-template]').forEach((button) => {
     button.addEventListener('click', async () => {
         const template = button.getAttribute('data-template') || '';
@@ -48,6 +152,7 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
         const leadId = button.getAttribute('data-lead-id') || '';
         const phone = button.getAttribute('data-phone') || '';
         const message = button.getAttribute('data-message') || '';
+        const delaySeconds = Number.parseInt(button.getAttribute('data-delay-seconds') || '3', 10);
 
         button.disabled = true;
         button.textContent = 'Sending...';
@@ -64,7 +169,11 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
             const response = await fetch('index.php?api=wa_send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone, message }),
+                body: JSON.stringify({
+                    phone,
+                    message,
+                    delaySeconds: Number.isFinite(delaySeconds) ? delaySeconds : 3,
+                }),
             });
             const payload = await response.json();
             if (!response.ok || !payload.ok) {
