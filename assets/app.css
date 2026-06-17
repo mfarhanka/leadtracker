@@ -1,0 +1,99 @@
+:root {
+    --page-bg: #f6f7f9;
+    --ink: #1d2733;
+    --muted: #687385;
+    --line: #dfe4ea;
+    --panel: #ffffff;
+    --accent: #1167b1;
+}
+
+body {
+    background: var(--page-bg);
+    color: var(--ink);
+}
+
+.navbar-brand {
+    color: var(--accent);
+    letter-spacing: 0;
+}
+
+.panel,
+.toolbar,
+.empty-state,
+.lead-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+
+.panel {
+    padding: 1.25rem;
+}
+
+.toolbar {
+    padding: 1rem;
+}
+
+.empty-state {
+    padding: 2rem;
+    text-align: center;
+}
+
+.lead-list {
+    display: grid;
+    gap: 0.85rem;
+}
+
+.lead-card {
+    padding: 1rem;
+}
+
+.status-badge {
+    background: #e7f1ff;
+    color: #0b4f8a;
+    border: 1px solid #c9def8;
+}
+
+.ad-link {
+    display: block;
+    color: #245b8f;
+    overflow-wrap: anywhere;
+    text-decoration-thickness: 1px;
+}
+
+.notes {
+    color: var(--muted);
+    white-space: normal;
+}
+
+.actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+    gap: 0.5rem;
+    min-width: min(100%, 330px);
+    align-self: start;
+}
+
+.actions form {
+    display: contents;
+}
+
+.min-w-0 {
+    min-width: 0;
+}
+
+.btn {
+    border-radius: 6px;
+}
+
+@media (max-width: 575.98px) {
+    .actions {
+        grid-template-columns: 1fr;
+    }
+
+    .panel,
+    .toolbar,
+    .lead-card {
+        padding: 0.9rem;
+    }
+}
