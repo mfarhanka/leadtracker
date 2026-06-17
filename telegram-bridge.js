@@ -134,6 +134,14 @@ function getDefaultTemplate() {
     };
 }
 
+function normalizeTemplateDelaySeconds(value) {
+    const delay = Number.parseInt(value, 10);
+    if (!Number.isFinite(delay)) {
+        return 10;
+    }
+    return Math.min(Math.max(delay, 0), 30);
+}
+
 function loadTemplateOptions() {
     const templates = readJson(templatesFile, [])
         .filter((template) => String(template.body || '').trim() !== '')
@@ -141,7 +149,7 @@ function loadTemplateOptions() {
             id: String(template.id || ''),
             name: String(template.name || 'Untitled Template'),
             body: String(template.body || ''),
-            delaySeconds: Number.parseInt(template.delay_seconds || '10', 10) || 10,
+            delaySeconds: normalizeTemplateDelaySeconds(template.delay_seconds || 10),
         }));
 
     if (templates.length > 0) {
@@ -149,6 +157,31 @@ function loadTemplateOptions() {
     }
 
     return [getDefaultTemplate()];
+}
+
+function loadTemplates() {
+    return readJson(templatesFile, []);
+}
+
+function saveTemplates(templates) {
+    writeJson(templatesFile, templates);
+}
+
+function findTemplate(templates, templateId) {
+    return templates.find((template) => String(template.id || '') === templateId) || null;
+}
+
+function templateSummary(template) {
+    const name = String(template.name || 'Untitled Template');
+    const body = String(template.body || '');
+    const delaySeconds = normalizeTemplateDelaySeconds(template.delay_seconds || 10);
+    const preview = body.length > 700 ? `${body.slice(0, 700)}...` : body;
+    return [
+        `Template: ${name}`,
+        `Delay: ${delaySeconds}s`,
+        '',
+        preview || '(empty)',
+    ].join('\n');
 }
 
 function makeTemplateKeyboard(templates) {
@@ -159,6 +192,28 @@ function makeTemplateKeyboard(templates) {
 
     rows.push([{ text: 'Use default template', callback_data: 'tpl:default' }]);
     return rows;
+}
+
+function makeTemplateManagerKeyboard(templates) {
+    const rows = [[{ text: 'Add Template', callback_data: 'tm:add' }]];
+    for (const template of templates.slice(0, 48)) {
+        rows.push([{ text: String(template.name || 'Untitled Template').slice(0, 60), callback_data: `tm:view:${template.id}` }]);
+    }
+    return rows;
+}
+
+function makeTemplateDetailKeyboard(templateId) {
+    return [
+        [
+            { text: 'Edit Name', callback_data: `tm:edit:name:${templateId}` },
+            { text: 'Edit Delay', callback_data: `tm:edit:delay:${templateId}` },
+        ],
+        [{ text: 'Edit Message', callback_data: `tm:edit:body:${templateId}` }],
+        [
+            { text: 'Delete', callback_data: `tm:del:${templateId}` },
+            { text: 'Back', callback_data: 'tm:list' },
+        ],
+    ];
 }
 
 function renderMessage(template, lead) {
@@ -235,6 +290,7 @@ function getChatPhone(message) {
 
 function createSession(chatId) {
     const session = {
+        mode: 'lead',
         step: 'phone',
         phone: '',
         adLink: '',
@@ -295,6 +351,172 @@ async function askTemplate(chatId, session) {
             inline_keyboard: makeTemplateKeyboard(session.templates),
         },
     });
+}
+
+async function showTemplateManager(chatId) {
+    const templates = loadTemplates();
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: templates.length > 0 ? 'Select a template to manage.' : 'No templates yet. Add one from Telegram.',
+        reply_markup: {
+            inline_keyboard: makeTemplateManagerKeyboard(templates),
+        },
+    });
+}
+
+async function showTemplateDetail(chatId, templateId) {
+    const template = findTemplate(loadTemplates(), templateId);
+    if (!template) {
+        await requestJson('sendMessage', {
+            chat_id: chatId,
+            text: 'Template was not found.',
+        });
+        return;
+    }
+
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: templateSummary(template),
+        reply_markup: {
+            inline_keyboard: makeTemplateDetailKeyboard(templateId),
+        },
+    });
+}
+
+async function startTemplateAdd(chatId) {
+    sessions.set(String(chatId), {
+        mode: 'template_add',
+        step: 'name',
+        draft: {
+            name: '',
+            body: '',
+            delaySeconds: 10,
+        },
+    });
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: 'Send template name.',
+    });
+}
+
+async function startTemplateEdit(chatId, templateId, field) {
+    const template = findTemplate(loadTemplates(), templateId);
+    if (!template) {
+        await requestJson('sendMessage', {
+            chat_id: chatId,
+            text: 'Template was not found.',
+        });
+        return;
+    }
+
+    sessions.set(String(chatId), {
+        mode: 'template_edit',
+        step: field,
+        templateId,
+    });
+
+    const prompt = field === 'body'
+        ? 'Send new template message. Use --- on its own line to split WhatsApp messages.'
+        : field === 'delay'
+            ? 'Send seconds between messages, 0 to 30.'
+            : 'Send new template name.';
+
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: prompt,
+    });
+}
+
+async function handleTemplateSessionMessage(message, session) {
+    const chatId = message.chat.id;
+    const text = getChatText(message);
+
+    if (session.mode === 'template_add') {
+        if (session.step === 'name') {
+            if (!text) {
+                await requestJson('sendMessage', { chat_id: chatId, text: 'Template name is required.' });
+                return;
+            }
+            session.draft.name = text;
+            session.step = 'body';
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: 'Send template message. Use --- on its own line to split WhatsApp messages.',
+            });
+            return;
+        }
+
+        if (session.step === 'body') {
+            if (!text) {
+                await requestJson('sendMessage', { chat_id: chatId, text: 'Template message is required.' });
+                return;
+            }
+            session.draft.body = text;
+            session.step = 'delay';
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: 'Send seconds between messages, 0 to 30. Send 10 if unsure.',
+            });
+            return;
+        }
+
+        if (session.step === 'delay') {
+            const now = new Date().toISOString();
+            const template = {
+                id: crypto.randomBytes(8).toString('hex'),
+                name: session.draft.name,
+                body: session.draft.body,
+                delay_seconds: normalizeTemplateDelaySeconds(text),
+                created_at: now,
+                updated_at: now,
+            };
+            const templates = loadTemplates();
+            templates.push(template);
+            saveTemplates(templates);
+            clearSession(chatId);
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: `Template saved: ${template.name}`,
+            });
+            await showTemplateDetail(chatId, template.id);
+            return;
+        }
+    }
+
+    if (session.mode === 'template_edit') {
+        const templates = loadTemplates();
+        const template = findTemplate(templates, session.templateId);
+        if (!template) {
+            clearSession(chatId);
+            await requestJson('sendMessage', { chat_id: chatId, text: 'Template was not found.' });
+            return;
+        }
+
+        if (session.step === 'name') {
+            if (!text) {
+                await requestJson('sendMessage', { chat_id: chatId, text: 'Template name is required.' });
+                return;
+            }
+            template.name = text;
+        } else if (session.step === 'body') {
+            if (!text) {
+                await requestJson('sendMessage', { chat_id: chatId, text: 'Template message is required.' });
+                return;
+            }
+            template.body = text;
+        } else if (session.step === 'delay') {
+            template.delay_seconds = normalizeTemplateDelaySeconds(text);
+        }
+
+        template.updated_at = new Date().toISOString();
+        saveTemplates(templates);
+        clearSession(chatId);
+        await requestJson('sendMessage', {
+            chat_id: chatId,
+            text: `Template updated: ${template.name || 'Untitled Template'}`,
+        });
+        await showTemplateDetail(chatId, String(template.id || ''));
+    }
 }
 
 function findDuplicate(leads, phone, adLink) {
@@ -548,9 +770,23 @@ async function handleLeadStep(message) {
 async function handleUpdate(update) {
     if (update.message) {
         const text = getChatText(update.message);
+        const chatId = update.message.chat.id;
+        if (text === '/cancel') {
+            clearSession(chatId);
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: 'Cancelled.',
+            });
+            return;
+        }
+        if (text === '/templates') {
+            clearSession(chatId);
+            await showTemplateManager(chatId);
+            return;
+        }
         if (text === '/start' || text === '/help' || text === '/new') {
             await requestJson('sendMessage', {
-                chat_id: update.message.chat.id,
+                chat_id: chatId,
                 text: [
                     'I will ask for lead details one by one.',
                     '',
@@ -558,9 +794,17 @@ async function handleUpdate(update) {
                     '2. Ads link, optional',
                     '3. Name, optional',
                     '4. Message template',
+                    '',
+                    'Use /templates to add, edit, or delete templates.',
+                    'Use /cancel to stop the current flow.',
                 ].join('\n'),
             });
-            await askPhone(update.message.chat.id);
+            await askPhone(chatId);
+            return;
+        }
+        const session = getSession(chatId);
+        if (session?.mode === 'template_add' || session?.mode === 'template_edit') {
+            await handleTemplateSessionMessage(update.message, session);
             return;
         }
         await handleLeadStep(update.message);
@@ -571,6 +815,81 @@ async function handleUpdate(update) {
         const data = String(update.callback_query.data || '');
         const chatId = update.callback_query.message.chat.id;
         const session = getSession(chatId);
+
+        if (data === 'tm:list') {
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Templates',
+            });
+            await showTemplateManager(chatId);
+            return;
+        }
+
+        if (data === 'tm:add') {
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Adding template',
+            });
+            await startTemplateAdd(chatId);
+            return;
+        }
+
+        const templateViewMatch = data.match(/^tm:view:([a-f0-9]{16})$/);
+        if (templateViewMatch) {
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Template',
+            });
+            await showTemplateDetail(chatId, templateViewMatch[1]);
+            return;
+        }
+
+        const templateEditMatch = data.match(/^tm:edit:(name|body|delay):([a-f0-9]{16})$/);
+        if (templateEditMatch) {
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Editing template',
+            });
+            await startTemplateEdit(chatId, templateEditMatch[2], templateEditMatch[1]);
+            return;
+        }
+
+        const templateDeleteMatch = data.match(/^tm:del:([a-f0-9]{16})$/);
+        if (templateDeleteMatch) {
+            const template = findTemplate(loadTemplates(), templateDeleteMatch[1]);
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Confirm delete',
+            });
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: `Delete template "${template?.name || 'Untitled Template'}"?`,
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: 'Confirm Delete', callback_data: `tm:confirmdel:${templateDeleteMatch[1]}` },
+                        { text: 'Cancel', callback_data: `tm:view:${templateDeleteMatch[1]}` },
+                    ]],
+                },
+            });
+            return;
+        }
+
+        const templateConfirmDeleteMatch = data.match(/^tm:confirmdel:([a-f0-9]{16})$/);
+        if (templateConfirmDeleteMatch) {
+            const templates = loadTemplates();
+            const template = findTemplate(templates, templateConfirmDeleteMatch[1]);
+            saveTemplates(templates.filter((item) => String(item.id || '') !== templateConfirmDeleteMatch[1]));
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Template deleted',
+            });
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: `Template deleted: ${template?.name || 'Untitled Template'}`,
+            });
+            await showTemplateManager(chatId);
+            return;
+        }
 
         if (data === 'skip:adLink' && session?.step === 'adLink') {
             session.adLink = '';

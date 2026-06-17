@@ -668,7 +668,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                     </div>
                 </div>
                 <div class="small text-secondary mt-3">
-                    Send <code>/new</code>. The bot asks for phone number, optional ads link, optional name, then template.
+                    Send <code>/new</code> to add leads. Send <code>/templates</code> to add, edit, or delete templates.
                 </div>
             </div>
         </section>
