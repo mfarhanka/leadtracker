@@ -19,6 +19,7 @@ let statusMessage = token
 let botName = '';
 let lastError = '';
 let processedCount = 0;
+const sessions = new Map();
 
 function requestJson(method, params = {}) {
     return new Promise((resolve, reject) => {
@@ -187,6 +188,65 @@ function parseLeadFromMessage(message) {
     };
 }
 
+function getChatText(message) {
+    return String(message.text || message.caption || '').trim();
+}
+
+function getChatPhone(message) {
+    return normalizePhone(message.contact?.phone_number || getChatText(message));
+}
+
+function createSession(chatId) {
+    const session = {
+        step: 'phone',
+        phone: '',
+        adLink: '',
+        company: '',
+    };
+    sessions.set(String(chatId), session);
+    return session;
+}
+
+function getSession(chatId) {
+    return sessions.get(String(chatId));
+}
+
+function clearSession(chatId) {
+    sessions.delete(String(chatId));
+}
+
+async function askPhone(chatId) {
+    createSession(chatId);
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: 'Send WhatsApp phone number.',
+    });
+}
+
+async function askAdLink(chatId) {
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: 'Send ads link.',
+        reply_markup: {
+            inline_keyboard: [[
+                { text: 'Skip ads link', callback_data: 'skip:adLink' },
+            ]],
+        },
+    });
+}
+
+async function askName(chatId) {
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: 'Send name.',
+        reply_markup: {
+            inline_keyboard: [[
+                { text: 'Skip name', callback_data: 'skip:company' },
+            ]],
+        },
+    });
+}
+
 function findDuplicate(leads, phone, adLink) {
     return leads.find((lead) => {
         const samePhone = phone && lead.phone === phone;
@@ -299,30 +359,110 @@ async function sendLeadPrompt(chatId, parsed) {
     });
 }
 
-async function handleUpdate(update) {
-    if (update.message) {
-        const text = String(update.message.text || update.message.caption || '').trim();
-        if (text === '/start' || text === '/help') {
+async function finishLeadSession(chatId, session) {
+    const parsed = {
+        company: session.company,
+        phone: session.phone,
+        adLink: session.adLink,
+    };
+    clearSession(chatId);
+    await sendLeadPrompt(chatId, parsed);
+    processedCount += 1;
+}
+
+async function handleLeadStep(message) {
+    const chatId = message.chat.id;
+    const text = getChatText(message);
+    const session = getSession(chatId) || createSession(chatId);
+
+    if (session.step === 'phone') {
+        const phone = getChatPhone(message);
+        if (!/^60\d{8,11}$/.test(phone)) {
             await requestJson('sendMessage', {
-                chat_id: update.message.chat.id,
-                text: [
-                    'Send me a lead with name, contact, and link.',
-                    '',
-                    'Example:',
-                    'Name: ABC Sdn Bhd',
-                    'Contact: 60123456789',
-                    'Link: https://www.mudah.my/example',
-                ].join('\n'),
+                chat_id: chatId,
+                text: 'Phone number not valid. Send Malaysia WhatsApp number like 60123456789.',
             });
             return;
         }
-        await sendLeadPrompt(update.message.chat.id, parseLeadFromMessage(update.message));
-        processedCount += 1;
+        session.phone = phone;
+        session.step = 'adLink';
+        await askAdLink(chatId);
+        return;
+    }
+
+    if (session.step === 'adLink') {
+        const adLink = cleanUrl(text);
+        if (!adLink) {
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: 'Ads link not valid. Send a link, or tap Skip ads link.',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: 'Skip ads link', callback_data: 'skip:adLink' },
+                    ]],
+                },
+            });
+            return;
+        }
+        session.adLink = adLink;
+        session.step = 'company';
+        await askName(chatId);
+        return;
+    }
+
+    if (session.step === 'company') {
+        session.company = text;
+        await finishLeadSession(chatId, session);
+    }
+}
+
+async function handleUpdate(update) {
+    if (update.message) {
+        const text = getChatText(update.message);
+        if (text === '/start' || text === '/help' || text === '/new') {
+            await requestJson('sendMessage', {
+                chat_id: update.message.chat.id,
+                text: [
+                    'I will ask for lead details one by one.',
+                    '',
+                    '1. Phone number',
+                    '2. Ads link, optional',
+                    '3. Name, optional',
+                ].join('\n'),
+            });
+            await askPhone(update.message.chat.id);
+            return;
+        }
+        await handleLeadStep(update.message);
         return;
     }
 
     if (update.callback_query) {
         const data = String(update.callback_query.data || '');
+        const chatId = update.callback_query.message.chat.id;
+        const session = getSession(chatId);
+
+        if (data === 'skip:adLink' && session?.step === 'adLink') {
+            session.adLink = '';
+            session.step = 'company';
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Ads link skipped.',
+            });
+            await askName(chatId);
+            return;
+        }
+
+        if (data === 'skip:company' && session?.step === 'company') {
+            session.company = '';
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Name skipped.',
+            });
+            await finishLeadSession(chatId, session);
+            return;
+        }
+
         const match = data.match(/^sent:([a-f0-9]{16})$/);
         if (match && updateLeadStatus(match[1], 'sent')) {
             await requestJson('answerCallbackQuery', {

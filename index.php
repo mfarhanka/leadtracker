@@ -664,7 +664,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                     </div>
                 </div>
                 <div class="small text-secondary mt-3">
-                    Send chat text like <code>Name: ABC</code>, <code>Contact: 60123456789</code>, and <code>Link: https://...</code>.
+                    Send <code>/new</code>. The bot asks for phone number first, then optional ads link and optional name.
                 </div>
             </div>
         </section>
