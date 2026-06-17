@@ -253,6 +253,31 @@ function bridge_request(string $path, string $method = 'GET', ?array $payload = 
     return is_array($data) ? $data : ['ok' => false, 'statusMessage' => 'Invalid bridge response.'];
 }
 
+function telegram_bridge_request(string $path): array
+{
+    $url = 'http://127.0.0.1:3031' . $path;
+    $options = [
+        'http' => [
+            'method' => 'GET',
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'header' => "Accept: application/json\r\n",
+        ],
+    ];
+
+    $response = @file_get_contents($url, false, stream_context_create($options));
+    if ($response === false) {
+        return [
+            'ok' => false,
+            'status' => 'offline',
+            'statusMessage' => 'Telegram bridge offline. Run start-telegram-bridge.bat on the server.',
+        ];
+    }
+
+    $data = json_decode($response, true);
+    return is_array($data) ? $data : ['ok' => false, 'statusMessage' => 'Invalid Telegram bridge response.'];
+}
+
 $leads = load_leads($dataFile);
 $templates = load_templates($templatesFile);
 if (!file_exists($templatesFile)) {
@@ -269,6 +294,11 @@ if (isset($_GET['api'])) {
 
     if ($_GET['api'] === 'wa_status') {
         echo json_encode(bridge_request('/status'));
+        exit;
+    }
+
+    if ($_GET['api'] === 'tg_status') {
+        echo json_encode(telegram_bridge_request('/status'));
         exit;
     }
 
@@ -545,7 +575,7 @@ $templateForm = [
 ];
 
 $statuses = ['New', 'WhatsApp Sent', 'Replied', 'Applied', 'Rejected', 'No Response'];
-$sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
+$sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Telegram', 'Other'];
 $shouldOpenLeadModal = $editing !== null || $errors !== [];
 $shouldOpenTemplateModal = $templateErrors !== [];
 $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
@@ -557,7 +587,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= htmlspecialchars($appName) ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="assets/app.css?v=4" rel="stylesheet">
+    <link href="assets/app.css?v=5" rel="stylesheet">
 </head>
 <body>
 <nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top">
@@ -613,6 +643,28 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                 </div>
                 <div class="small text-secondary mt-3">
                     Connected number: <span id="waConnectedNumber">-</span>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+                    <div>
+                        <h2 class="h5 mb-1">Telegram Bot</h2>
+                        <p class="text-secondary small mb-0" id="tgStatusText">Run the Telegram bridge to import leads from chat.</p>
+                    </div>
+                    <button class="btn btn-outline-primary btn-sm" type="button" id="tgRefreshButton">Refresh</button>
+                </div>
+                <div class="telegram-status-box">
+                    <div>
+                        <div class="small text-secondary">Bot</div>
+                        <div class="fw-semibold" id="tgBotName">-</div>
+                    </div>
+                    <div>
+                        <div class="small text-secondary">Leads received</div>
+                        <div class="fw-semibold" id="tgProcessedCount">0</div>
+                    </div>
+                </div>
+                <div class="small text-secondary mt-3">
+                    Send chat text like <code>Name: ABC</code>, <code>Contact: 60123456789</code>, and <code>Link: https://...</code>.
                 </div>
             </div>
         </section>
@@ -944,6 +996,6 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
         'delay_seconds' => normalize_delay_seconds($template['delay_seconds'] ?? 10),
     ];
 }, $templates), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) ?></script>
-<script src="assets/app.js?v=7"></script>
+<script src="assets/app.js?v=8"></script>
 </body>
 </html>

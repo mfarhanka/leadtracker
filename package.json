@@ -4,7 +4,8 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "whatsapp": "node whatsapp-bridge.js"
+    "whatsapp": "node whatsapp-bridge.js",
+    "telegram": "node telegram-bridge.js"
   },
   "dependencies": {
     "express": "^4.19.2",

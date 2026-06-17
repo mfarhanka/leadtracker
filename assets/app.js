@@ -317,6 +317,44 @@ async function refreshWhatsappStatus() {
     }
 }
 
+async function refreshTelegramStatus() {
+    const statusText = document.querySelector('#tgStatusText');
+    const botName = document.querySelector('#tgBotName');
+    const processedCount = document.querySelector('#tgProcessedCount');
+
+    try {
+        const response = await fetch('index.php?api=tg_status', { cache: 'no-store' });
+        const payload = await response.json();
+        const isReady = payload.status === 'ready';
+
+        if (statusText) {
+            statusText.textContent = payload.statusMessage || 'Telegram bridge is running.';
+            statusText.classList.toggle('text-success', isReady);
+            statusText.classList.toggle('text-secondary', !isReady);
+        }
+
+        if (botName) {
+            botName.textContent = payload.botName || '-';
+        }
+
+        if (processedCount) {
+            processedCount.textContent = String(payload.processedCount || 0);
+        }
+    } catch (error) {
+        if (statusText) {
+            statusText.innerHTML = 'Bridge offline. Run <code>start-telegram-bridge.bat</code>.';
+            statusText.classList.remove('text-success');
+            statusText.classList.add('text-secondary');
+        }
+        if (botName) {
+            botName.textContent = '-';
+        }
+        if (processedCount) {
+            processedCount.textContent = '0';
+        }
+    }
+}
+
 const waRefreshButton = document.querySelector('#waRefreshButton');
 if (waRefreshButton) {
     waRefreshButton.addEventListener('click', refreshWhatsappStatus);
@@ -325,4 +363,14 @@ if (waRefreshButton) {
 if (document.querySelector('#waQrBox')) {
     refreshWhatsappStatus();
     window.setInterval(refreshWhatsappStatus, 5000);
+}
+
+const tgRefreshButton = document.querySelector('#tgRefreshButton');
+if (tgRefreshButton) {
+    tgRefreshButton.addEventListener('click', refreshTelegramStatus);
+}
+
+if (document.querySelector('#tgStatusText')) {
+    refreshTelegramStatus();
+    window.setInterval(refreshTelegramStatus, 5000);
 }
