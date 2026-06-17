@@ -216,6 +216,40 @@ function makeTemplateDetailKeyboard(templateId) {
     ];
 }
 
+function makeTemplateDoneKeyboard() {
+    return [
+        [
+            { text: '/new', callback_data: 'lead:new' },
+            { text: 'New Template', callback_data: 'tm:add' },
+        ],
+        [{ text: 'Templates', callback_data: 'tm:list' }],
+    ];
+}
+
+function makeLeadDoneKeyboard(lead) {
+    return [
+        [
+            { text: 'Send WhatsApp', callback_data: `sendwa:${lead.id}` },
+            { text: 'Mark Sent', callback_data: `sent:${lead.id}` },
+        ],
+        [
+            { text: '/new', callback_data: 'lead:new' },
+            { text: 'Templates', callback_data: 'tm:list' },
+        ],
+        [
+            { text: 'Open WhatsApp', url: buildWhatsappUrl(lead) },
+            { text: 'Open LeadTracker', url: appUrl },
+        ],
+    ];
+}
+
+function makeQuickDoneKeyboard() {
+    return [[
+        { text: '/new', callback_data: 'lead:new' },
+        { text: 'Templates', callback_data: 'tm:list' },
+    ]];
+}
+
 function renderMessage(template, lead) {
     const message = String(template || defaultMessageTemplate()).replace(/\{company\}|\{ad_link\}|\{phone\}|\{source\}/g, (match) => {
         if (match === '{company}') return lead.company || '';
@@ -315,6 +349,24 @@ async function askPhone(chatId) {
         chat_id: chatId,
         text: 'Send WhatsApp phone number.',
     });
+}
+
+async function startLeadFlow(chatId) {
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: [
+            'I will ask for lead details one by one.',
+            '',
+            '1. Phone number',
+            '2. Ads link, optional',
+            '3. Name, optional',
+            '4. Message template',
+            '',
+            'Use /templates to add, edit, or delete templates.',
+            'Use /cancel to stop the current flow.',
+        ].join('\n'),
+    });
+    await askPhone(chatId);
 }
 
 async function askAdLink(chatId) {
@@ -477,6 +529,9 @@ async function handleTemplateSessionMessage(message, session) {
             await requestJson('sendMessage', {
                 chat_id: chatId,
                 text: `Template saved: ${template.name}`,
+                reply_markup: {
+                    inline_keyboard: makeTemplateDoneKeyboard(),
+                },
             });
             await showTemplateDetail(chatId, template.id);
             return;
@@ -514,6 +569,9 @@ async function handleTemplateSessionMessage(message, session) {
         await requestJson('sendMessage', {
             chat_id: chatId,
             text: `Template updated: ${template.name || 'Untitled Template'}`,
+            reply_markup: {
+                inline_keyboard: makeTemplateDoneKeyboard(),
+            },
         });
         await showTemplateDetail(chatId, String(template.id || ''));
     }
@@ -698,13 +756,7 @@ async function sendLeadPrompt(chatId, parsed) {
         chat_id: chatId,
         text: reply,
         reply_markup: {
-            inline_keyboard: [[
-                { text: 'Send WhatsApp', callback_data: `sendwa:${lead.id}` },
-                { text: 'Mark Sent', callback_data: `sent:${lead.id}` },
-            ], [
-                { text: 'Open WhatsApp', url: buildWhatsappUrl(lead) },
-                { text: 'Open LeadTracker', url: appUrl },
-            ]],
+            inline_keyboard: makeLeadDoneKeyboard(lead),
         },
     });
 }
@@ -785,21 +837,7 @@ async function handleUpdate(update) {
             return;
         }
         if (text === '/start' || text === '/help' || text === '/new') {
-            await requestJson('sendMessage', {
-                chat_id: chatId,
-                text: [
-                    'I will ask for lead details one by one.',
-                    '',
-                    '1. Phone number',
-                    '2. Ads link, optional',
-                    '3. Name, optional',
-                    '4. Message template',
-                    '',
-                    'Use /templates to add, edit, or delete templates.',
-                    'Use /cancel to stop the current flow.',
-                ].join('\n'),
-            });
-            await askPhone(chatId);
+            await startLeadFlow(chatId);
             return;
         }
         const session = getSession(chatId);
@@ -815,6 +853,16 @@ async function handleUpdate(update) {
         const data = String(update.callback_query.data || '');
         const chatId = update.callback_query.message.chat.id;
         const session = getSession(chatId);
+
+        if (data === 'lead:new') {
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'New lead',
+            });
+            clearSession(chatId);
+            await startLeadFlow(chatId);
+            return;
+        }
 
         if (data === 'tm:list') {
             await requestJson('answerCallbackQuery', {
@@ -886,6 +934,9 @@ async function handleUpdate(update) {
             await requestJson('sendMessage', {
                 chat_id: chatId,
                 text: `Template deleted: ${template?.name || 'Untitled Template'}`,
+                reply_markup: {
+                    inline_keyboard: makeTemplateDoneKeyboard(),
+                },
             });
             await showTemplateManager(chatId);
             return;
@@ -930,11 +981,21 @@ async function handleUpdate(update) {
                 callback_query_id: update.callback_query.id,
                 text: 'Sending WhatsApp from LeadTracker...',
             });
+            const sendingLead = findLeadById(sendWhatsappMatch[1]);
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: sendingLead
+                    ? `Sending WhatsApp to ${sendingLead.phone}...`
+                    : 'Sending WhatsApp...',
+            });
             const result = await sendLeadWhatsapp(sendWhatsappMatch[1]);
             if (result.ok) {
                 await requestJson('sendMessage', {
                     chat_id: chatId,
                     text: `Sent ${result.sent} WhatsApp message${result.sent === 1 ? '' : 's'} and updated LeadTracker.`,
+                    reply_markup: {
+                        inline_keyboard: makeQuickDoneKeyboard(),
+                    },
                 });
                 await requestJson('editMessageReplyMarkup', {
                     chat_id: update.callback_query.message.chat.id,
@@ -951,6 +1012,9 @@ async function handleUpdate(update) {
                         ], [
                             { text: 'Open WhatsApp', url: buildWhatsappUrl(result.lead) },
                             { text: 'Open LeadTracker', url: appUrl },
+                        ], [
+                            { text: '/new', callback_data: 'lead:new' },
+                            { text: 'Templates', callback_data: 'tm:list' },
                         ]],
                     } : undefined,
                 });
@@ -968,6 +1032,13 @@ async function handleUpdate(update) {
                 chat_id: update.callback_query.message.chat.id,
                 message_id: update.callback_query.message.message_id,
                 reply_markup: { inline_keyboard: [] },
+            });
+            await requestJson('sendMessage', {
+                chat_id: chatId,
+                text: 'Ready for next action.',
+                reply_markup: {
+                    inline_keyboard: makeQuickDoneKeyboard(),
+                },
             });
         } else {
             await requestJson('answerCallbackQuery', {
