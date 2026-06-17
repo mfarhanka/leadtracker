@@ -119,7 +119,7 @@ function normalizeMessageParts(messages, fallbackMessage) {
 function normalizeDelaySeconds(value) {
     const delay = Number.parseInt(value, 10);
     if (!Number.isFinite(delay)) {
-        return 3;
+        return 10;
     }
     return Math.min(Math.max(delay, 0), 30);
 }

@@ -60,7 +60,7 @@ function seed_templates(array $templates): array
         'id' => 'default-job-application',
         'name' => 'Job Application Follow-up',
         'body' => default_message_template(),
-        'delay_seconds' => 3,
+        'delay_seconds' => 10,
         'created_at' => date('c'),
         'updated_at' => date('c'),
     ]];
@@ -172,13 +172,13 @@ function normalize_delay_seconds($value): int
 {
     $delay = filter_var($value, FILTER_VALIDATE_INT, [
         'options' => [
-            'default' => 3,
+            'default' => 10,
             'min_range' => 0,
             'max_range' => 30,
         ],
     ]);
 
-    return is_int($delay) ? $delay : 3;
+    return is_int($delay) ? $delay : 10;
 }
 
 function normalize_whatsapp_send_status(string $status): string
@@ -222,7 +222,7 @@ function bridge_request(string $path, string $method = 'GET', ?array $payload = 
     if ($payload !== null && (isset($payload['messages']) || isset($payload['message']))) {
         $messages = normalize_message_parts($payload['messages'] ?? null, (string)($payload['message'] ?? ''));
         $messageCount = max(1, count($messages));
-        $delaySeconds = normalize_delay_seconds($payload['delaySeconds'] ?? 3);
+        $delaySeconds = normalize_delay_seconds($payload['delaySeconds'] ?? 10);
         $timeout += (($messageCount - 1) * $delaySeconds) + 5;
     }
 
@@ -288,7 +288,7 @@ if (isset($_GET['api'])) {
             'phone' => normalize_phone((string)($payload['phone'] ?? '')),
             'message' => $message,
             'messages' => $messages,
-            'delaySeconds' => normalize_delay_seconds($payload['delaySeconds'] ?? 3),
+            'delaySeconds' => normalize_delay_seconds($payload['delaySeconds'] ?? 10),
         ]);
 
         if (($result['ok'] ?? false) !== true) {
@@ -311,7 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $templateId = trim((string)($_POST['template_id'] ?? ''));
         $templateName = trim((string)($_POST['template_name'] ?? ''));
         $templateBody = trim((string)($_POST['template_body'] ?? ''));
-        $templateDelaySeconds = normalize_delay_seconds($_POST['template_delay_seconds'] ?? 3);
+        $templateDelaySeconds = normalize_delay_seconds($_POST['template_delay_seconds'] ?? 10);
 
         if ($templateName === '') {
             $templateErrors[] = 'Template name is required.';
@@ -420,7 +420,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $status = trim((string)($_POST['status'] ?? 'New'));
         $notes = trim((string)($_POST['notes'] ?? ''));
         $messageTemplate = trim((string)($_POST['message_template'] ?? ''));
-        $messageDelaySeconds = normalize_delay_seconds($_POST['message_delay_seconds'] ?? 3);
+        $messageDelaySeconds = normalize_delay_seconds($_POST['message_delay_seconds'] ?? 10);
 
         if ($phone !== '' && !preg_match('/^60\d{8,11}$/', $phone)) {
             $errors[] = 'Phone number must be a valid Malaysia format, for example 60107744530.';
@@ -534,14 +534,14 @@ $form = [
     'status' => $editing['status'] ?? ($_POST['status'] ?? 'New'),
     'notes' => $editing['notes'] ?? ($_POST['notes'] ?? ''),
     'message_template' => $editing['message_template'] ?? ($_POST['message_template'] ?? default_message_template()),
-    'message_delay_seconds' => $editing['message_delay_seconds'] ?? ($_POST['message_delay_seconds'] ?? 3),
+    'message_delay_seconds' => $editing['message_delay_seconds'] ?? ($_POST['message_delay_seconds'] ?? 10),
 ];
 
 $templateForm = [
     'id' => $_POST['template_id'] ?? '',
     'name' => $_POST['template_name'] ?? '',
     'body' => $_POST['template_body'] ?? default_message_template(),
-    'delay_seconds' => $_POST['template_delay_seconds'] ?? 3,
+    'delay_seconds' => $_POST['template_delay_seconds'] ?? 10,
 ];
 
 $statuses = ['New', 'WhatsApp Sent', 'Replied', 'Applied', 'Rejected', 'No Response'];
@@ -649,7 +649,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                     <?php
                     $message = build_message($lead);
                     $messageParts = split_message_parts($message);
-                    $messageDelaySeconds = normalize_delay_seconds($lead['message_delay_seconds'] ?? 3);
+                    $messageDelaySeconds = normalize_delay_seconds($lead['message_delay_seconds'] ?? 10);
                     $phone = (string)($lead['phone'] ?? '');
                     $adLink = (string)($lead['ad_link'] ?? '');
                     $companyName = trim((string)($lead['company'] ?? '')) !== '' ? (string)$lead['company'] : 'Untitled lead';
@@ -766,7 +766,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                                 <?php foreach ($templates as $template): ?>
                                     <option
                                         value="<?= htmlspecialchars((string)($template['id'] ?? '')) ?>"
-                                        data-template-delay="<?= normalize_delay_seconds($template['delay_seconds'] ?? 3) ?>"
+                                        data-template-delay="<?= normalize_delay_seconds($template['delay_seconds'] ?? 10) ?>"
                                     >
                                         <?= htmlspecialchars((string)($template['name'] ?? 'Untitled Template')) ?>
                                     </option>
@@ -840,7 +840,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                                 <?php
                                 $templateName = (string)($template['name'] ?? 'Untitled Template');
                                 $templateBody = (string)($template['body'] ?? '');
-                                $templateDelay = normalize_delay_seconds($template['delay_seconds'] ?? 3);
+                                $templateDelay = normalize_delay_seconds($template['delay_seconds'] ?? 10);
                                 $templateParts = split_message_parts($templateBody);
                                 ?>
                                 <div class="template-row">
@@ -941,9 +941,9 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
         'id' => (string)($template['id'] ?? ''),
         'name' => (string)($template['name'] ?? 'Untitled Template'),
         'body' => (string)($template['body'] ?? ''),
-        'delay_seconds' => normalize_delay_seconds($template['delay_seconds'] ?? 3),
+        'delay_seconds' => normalize_delay_seconds($template['delay_seconds'] ?? 10),
     ];
 }, $templates), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) ?></script>
-<script src="assets/app.js?v=6"></script>
+<script src="assets/app.js?v=7"></script>
 </body>
 </html>

@@ -74,7 +74,7 @@ if (templatePicker) {
         }
 
         if (delayInput) {
-            delayInput.value = String(template?.delay_seconds ?? option.dataset.templateDelay ?? '3');
+            delayInput.value = String(template?.delay_seconds ?? option.dataset.templateDelay ?? '10');
         }
     });
 }
@@ -100,7 +100,7 @@ document.querySelectorAll('[data-edit-template]').forEach((button) => {
         }
 
         if (templateDelay) {
-            templateDelay.value = String(template?.delay_seconds ?? button.dataset.templateDelay ?? '3');
+            templateDelay.value = String(template?.delay_seconds ?? button.dataset.templateDelay ?? '10');
         }
     });
 });
@@ -128,7 +128,7 @@ if (newTemplateButton) {
         }
 
         if (templateDelay) {
-            templateDelay.value = '3';
+            templateDelay.value = '10';
         }
     });
 }
@@ -160,7 +160,7 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
         const phone = button.getAttribute('data-phone') || '';
         const message = button.getAttribute('data-message') || '';
         const messages = splitMessageParts(message);
-        const delaySeconds = Number.parseInt(button.getAttribute('data-delay-seconds') || '3', 10);
+        const delaySeconds = Number.parseInt(button.getAttribute('data-delay-seconds') || '10', 10);
 
         button.disabled = true;
         button.textContent = messages.length > 1 ? `Sending 1/${messages.length}...` : 'Sending...';
@@ -184,7 +184,7 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
                     phone,
                     message,
                     messages,
-                    delaySeconds: Number.isFinite(delaySeconds) ? delaySeconds : 3,
+                    delaySeconds: Number.isFinite(delaySeconds) ? delaySeconds : 10,
                 }),
             });
             const payload = await response.json();
