@@ -314,6 +314,8 @@ $form = [
 
 $statuses = ['New', 'WhatsApp Sent', 'Replied', 'Applied', 'Rejected', 'No Response'];
 $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
+$shouldOpenLeadModal = $editing !== null || $errors !== [];
+$activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
 ?>
 <!doctype html>
 <html lang="en">
@@ -369,82 +371,25 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
                     Connected number: <span id="waConnectedNumber">-</span>
                 </div>
             </div>
-
-            <div class="panel">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h2 class="h4 mb-0"><?= $editing ? 'Edit Lead' : 'Add Lead' ?></h2>
-                    <?php if ($editing): ?>
-                        <a class="btn btn-outline-secondary btn-sm" href="index.php">Cancel</a>
-                    <?php endif; ?>
-                </div>
-
-                <form method="post" class="vstack gap-3" id="leadForm">
-                    <input type="hidden" name="id" value="<?= htmlspecialchars((string)$form['id']) ?>">
-                    <input type="hidden" name="action" value="save">
-
-                    <div>
-                        <label class="form-label" for="company">Company / Contact Name</label>
-                        <input class="form-control" id="company" name="company" value="<?= htmlspecialchars((string)$form['company']) ?>" required autocomplete="organization">
-                    </div>
-
-                    <div>
-                        <label class="form-label" for="phone">WhatsApp Number</label>
-                        <input class="form-control" id="phone" name="phone" value="<?= htmlspecialchars((string)$form['phone']) ?>" placeholder="60107744530" required inputmode="tel" autocomplete="tel">
-                        <div class="form-text">Accepts 0107744530, +60107744530, or 60107744530. Saved as 60 format.</div>
-                    </div>
-
-                    <div>
-                        <label class="form-label" for="ad_link">Ad Link</label>
-                        <input class="form-control" id="ad_link" name="ad_link" value="<?= htmlspecialchars((string)$form['ad_link']) ?>" placeholder="https://..." required inputmode="url">
-                    </div>
-
-                    <div class="row g-3">
-                        <div class="col-md-6">
-                            <label class="form-label" for="source">Source</label>
-                            <select class="form-select" id="source" name="source">
-                                <?php foreach ($sources as $source): ?>
-                                    <option value="<?= htmlspecialchars($source) ?>" <?= $form['source'] === $source ? 'selected' : '' ?>><?= htmlspecialchars($source) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label" for="status">Status</label>
-                            <select class="form-select" id="status" name="status">
-                                <?php foreach ($statuses as $status): ?>
-                                    <option value="<?= htmlspecialchars($status) ?>" <?= $form['status'] === $status ? 'selected' : '' ?>><?= htmlspecialchars($status) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label class="form-label" for="notes">Notes</label>
-                        <textarea class="form-control" id="notes" name="notes" rows="3" placeholder="Role, salary, location, follow-up..."><?= htmlspecialchars((string)$form['notes']) ?></textarea>
-                    </div>
-
-                    <button class="btn btn-primary w-100" type="submit"><?= $editing ? 'Update Lead' : 'Save Lead' ?></button>
-                </form>
-            </div>
         </section>
 
         <section class="col-12 col-xl-8">
             <div class="toolbar mb-3">
-                <form class="row g-2 align-items-center" method="get">
-                    <div class="col-12 col-lg">
-                        <input class="form-control" name="q" value="<?= htmlspecialchars($query) ?>" placeholder="Search company, phone, ad link, notes">
+                <div class="d-flex flex-column flex-md-row gap-2 align-items-md-center justify-content-between">
+                    <div>
+                        <h2 class="h5 mb-1">Leads</h2>
+                        <div class="text-secondary small">
+                            <?= count($filteredLeads) ?> shown
+                            <?php if ($activeFilterCount > 0): ?>
+                                · <?= $activeFilterCount ?> active filter<?= $activeFilterCount === 1 ? '' : 's' ?>
+                            <?php endif; ?>
+                        </div>
                     </div>
-                    <div class="col-7 col-lg-3">
-                        <select class="form-select" name="status">
-                            <option value="">All statuses</option>
-                            <?php foreach ($statuses as $status): ?>
-                                <option value="<?= htmlspecialchars($status) ?>" <?= $statusFilter === $status ? 'selected' : '' ?>><?= htmlspecialchars($status) ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#filterModal">Filter</button>
+                        <button class="btn btn-primary" type="button" data-bs-toggle="modal" data-bs-target="#leadModal">Add Lead</button>
                     </div>
-                    <div class="col-5 col-lg-auto">
-                        <button class="btn btn-outline-primary w-100" type="submit">Filter</button>
-                    </div>
-                </form>
+                </div>
             </div>
 
             <div class="lead-list">
@@ -479,11 +424,7 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
                                 <button class="btn btn-success" type="button" data-send-whatsapp="<?= htmlspecialchars($waUrl) ?>" data-lead-id="<?= htmlspecialchars((string)$lead['id']) ?>" data-phone="<?= htmlspecialchars((string)$lead['phone']) ?>" data-message="<?= htmlspecialchars($message) ?>">Send WhatsApp</button>
                                 <button class="btn btn-outline-secondary" type="button" data-template="<?= htmlspecialchars($message) ?>">Copy Template</button>
                                 <a class="btn btn-outline-primary" href="index.php?edit=<?= urlencode((string)$lead['id']) ?>">Edit</a>
-                                <form method="post" onsubmit="return confirm('Delete this lead?');">
-                                    <input type="hidden" name="action" value="delete">
-                                    <input type="hidden" name="id" value="<?= htmlspecialchars((string)$lead['id']) ?>">
-                                    <button class="btn btn-outline-danger" type="submit">Delete</button>
-                                </form>
+                                <button class="btn btn-outline-danger" type="button" data-delete-lead="<?= htmlspecialchars((string)$lead['id']) ?>" data-delete-name="<?= htmlspecialchars((string)$lead['company']) ?>" data-bs-toggle="modal" data-bs-target="#deleteModal">Delete</button>
                             </div>
                         </div>
                     </article>
@@ -493,6 +434,133 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
     </div>
 </main>
 
+<div class="modal fade" id="leadModal" tabindex="-1" aria-labelledby="leadModalTitle" aria-hidden="true" data-open-on-load="<?= $shouldOpenLeadModal ? 'true' : 'false' ?>">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <form method="post" id="leadForm">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="leadModalTitle"><?= $editing ? 'Edit Lead' : 'Add Lead' ?></h2>
+                    <?php if ($editing): ?>
+                        <a class="btn-close" aria-label="Close" href="index.php"></a>
+                    <?php else: ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <?php endif; ?>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="id" value="<?= htmlspecialchars((string)$form['id']) ?>">
+                    <input type="hidden" name="action" value="save">
+
+                    <div class="vstack gap-3">
+                        <div>
+                            <label class="form-label" for="company">Company / Contact Name</label>
+                            <input class="form-control" id="company" name="company" value="<?= htmlspecialchars((string)$form['company']) ?>" required autocomplete="organization">
+                        </div>
+
+                        <div>
+                            <label class="form-label" for="phone">WhatsApp Number</label>
+                            <input class="form-control" id="phone" name="phone" value="<?= htmlspecialchars((string)$form['phone']) ?>" placeholder="60107744530" required inputmode="tel" autocomplete="tel">
+                            <div class="form-text">Accepts 0107744530, +60107744530, or 60107744530. Saved as 60 format.</div>
+                        </div>
+
+                        <div>
+                            <label class="form-label" for="ad_link">Ad Link</label>
+                            <input class="form-control" id="ad_link" name="ad_link" value="<?= htmlspecialchars((string)$form['ad_link']) ?>" placeholder="https://..." required inputmode="url">
+                        </div>
+
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label" for="source">Source</label>
+                                <select class="form-select" id="source" name="source">
+                                    <?php foreach ($sources as $source): ?>
+                                        <option value="<?= htmlspecialchars($source) ?>" <?= $form['source'] === $source ? 'selected' : '' ?>><?= htmlspecialchars($source) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="status">Status</label>
+                                <select class="form-select" id="status" name="status">
+                                    <?php foreach ($statuses as $status): ?>
+                                        <option value="<?= htmlspecialchars($status) ?>" <?= $form['status'] === $status ? 'selected' : '' ?>><?= htmlspecialchars($status) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="form-label" for="notes">Notes</label>
+                            <textarea class="form-control" id="notes" name="notes" rows="3" placeholder="Role, salary, location, follow-up..."><?= htmlspecialchars((string)$form['notes']) ?></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <?php if ($editing): ?>
+                        <a class="btn btn-outline-secondary" href="index.php">Cancel</a>
+                    <?php else: ?>
+                        <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
+                    <?php endif; ?>
+                    <button class="btn btn-primary" type="submit"><?= $editing ? 'Update Lead' : 'Save Lead' ?></button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="filterModal" tabindex="-1" aria-labelledby="filterModalTitle" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="get">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="filterModalTitle">Filter Leads</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="vstack gap-3">
+                        <div>
+                            <label class="form-label" for="filter_q">Search</label>
+                            <input class="form-control" id="filter_q" name="q" value="<?= htmlspecialchars($query) ?>" placeholder="Company, phone, ad link, notes">
+                        </div>
+                        <div>
+                            <label class="form-label" for="filter_status">Status</label>
+                            <select class="form-select" id="filter_status" name="status">
+                                <option value="">All statuses</option>
+                                <?php foreach ($statuses as $status): ?>
+                                    <option value="<?= htmlspecialchars($status) ?>" <?= $statusFilter === $status ? 'selected' : '' ?>><?= htmlspecialchars($status) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <a class="btn btn-outline-secondary" href="index.php">Clear</a>
+                    <button class="btn btn-primary" type="submit">Apply Filter</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalTitle" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="deleteModalTitle">Delete Lead</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="id" id="deleteLeadId" value="">
+                    <p class="mb-0">Delete <strong id="deleteLeadName">this lead</strong>?</p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
+                    <button class="btn btn-danger" type="submit">Delete</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
     <div id="copyToast" class="toast" role="status" aria-live="polite" aria-atomic="true">
         <div class="toast-body">Template copied.</div>
@@ -500,6 +568,6 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="assets/app.js?v=2"></script>
+<script src="assets/app.js?v=3"></script>
 </body>
 </html>

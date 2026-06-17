@@ -1,6 +1,11 @@
 const phoneInput = document.querySelector('#phone');
 let waReady = false;
 
+const leadModalElement = document.querySelector('#leadModal');
+if (leadModalElement?.dataset.openOnLoad === 'true' && window.bootstrap) {
+    bootstrap.Modal.getOrCreateInstance(leadModalElement).show();
+}
+
 function normalizePhone(value) {
     let digits = value.replace(/\D+/g, '');
 
@@ -74,6 +79,21 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
         } finally {
             button.disabled = false;
             button.textContent = 'Send WhatsApp';
+        }
+    });
+});
+
+document.querySelectorAll('[data-delete-lead]').forEach((button) => {
+    button.addEventListener('click', () => {
+        const deleteId = document.querySelector('#deleteLeadId');
+        const deleteName = document.querySelector('#deleteLeadName');
+
+        if (deleteId) {
+            deleteId.value = button.getAttribute('data-delete-lead') || '';
+        }
+
+        if (deleteName) {
+            deleteName.textContent = button.getAttribute('data-delete-name') || 'this lead';
         }
     });
 });

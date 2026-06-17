@@ -106,10 +106,6 @@ body {
     align-self: start;
 }
 
-.actions form {
-    display: contents;
-}
-
 .min-w-0 {
     min-width: 0;
 }
