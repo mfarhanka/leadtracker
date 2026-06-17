@@ -105,10 +105,75 @@ function find_duplicate(array $leads, string $phone, string $adLink, ?string $ig
     return null;
 }
 
+function bridge_request(string $path, string $method = 'GET', ?array $payload = null): array
+{
+    $url = 'http://127.0.0.1:3030' . $path;
+    $options = [
+        'http' => [
+            'method' => $method,
+            'timeout' => 8,
+            'ignore_errors' => true,
+            'header' => "Accept: application/json\r\n",
+        ],
+    ];
+
+    if ($payload !== null) {
+        $options['http']['header'] .= "Content-Type: application/json\r\n";
+        $options['http']['content'] = json_encode($payload);
+    }
+
+    $response = @file_get_contents($url, false, stream_context_create($options));
+    if ($response === false) {
+        return [
+            'ok' => false,
+            'status' => 'offline',
+            'statusMessage' => 'WhatsApp bridge offline. Run start-whatsapp-bridge.bat on the server.',
+        ];
+    }
+
+    $data = json_decode($response, true);
+    return is_array($data) ? $data : ['ok' => false, 'statusMessage' => 'Invalid bridge response.'];
+}
+
 $leads = load_leads($dataFile);
 $flash = null;
 $errors = [];
 $editing = null;
+
+if (isset($_GET['api'])) {
+    header('Content-Type: application/json');
+
+    if ($_GET['api'] === 'wa_status') {
+        echo json_encode(bridge_request('/status'));
+        exit;
+    }
+
+    if ($_GET['api'] === 'wa_send') {
+        $raw = file_get_contents('php://input');
+        $payload = json_decode($raw !== false ? $raw : '', true);
+        if (!is_array($payload)) {
+            http_response_code(400);
+            echo json_encode(['ok' => false, 'error' => 'Invalid request body.']);
+            exit;
+        }
+
+        $result = bridge_request('/send', 'POST', [
+            'phone' => normalize_phone((string)($payload['phone'] ?? '')),
+            'message' => (string)($payload['message'] ?? ''),
+        ]);
+
+        if (($result['ok'] ?? false) !== true) {
+            http_response_code(409);
+        }
+
+        echo json_encode($result);
+        exit;
+    }
+
+    http_response_code(404);
+    echo json_encode(['ok' => false, 'error' => 'Unknown API endpoint.']);
+    exit;
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? 'save';
@@ -435,6 +500,6 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="assets/app.js"></script>
+<script src="assets/app.js?v=2"></script>
 </body>
 </html>

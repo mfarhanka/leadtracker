@@ -1,5 +1,4 @@
 const phoneInput = document.querySelector('#phone');
-const waBridgeUrl = 'http://127.0.0.1:3030';
 let waReady = false;
 
 function normalizePhone(value) {
@@ -57,7 +56,7 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
         }
 
         try {
-            const response = await fetch(`${waBridgeUrl}/send`, {
+            const response = await fetch('index.php?api=wa_send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone, message }),
@@ -112,7 +111,7 @@ async function refreshWhatsappStatus() {
     const navText = document.querySelector('#waConnectionText');
 
     try {
-        const response = await fetch(`${waBridgeUrl}/status`, { cache: 'no-store' });
+        const response = await fetch('index.php?api=wa_status', { cache: 'no-store' });
         const payload = await response.json();
         waReady = payload.status === 'ready';
 
