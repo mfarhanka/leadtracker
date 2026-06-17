@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const port = Number(process.env.LEADTRACKER_TG_PORT || 3031);
 const token = process.env.TELEGRAM_BOT_TOKEN || '';
 const appUrl = process.env.LEADTRACKER_APP_URL || 'http://127.0.0.1/leadtracker/index.php';
+const whatsappBridgePort = Number(process.env.LEADTRACKER_WA_PORT || 3030);
 const dataDir = path.join(__dirname, 'data');
 const leadsFile = path.join(dataDir, 'leads.json');
 const templatesFile = path.join(dataDir, 'templates.json');
@@ -126,9 +127,38 @@ function getDefaultTemplate() {
     const templates = readJson(templatesFile, []);
     const first = templates.find((template) => String(template.body || '').trim() !== '');
     return {
+        id: String(first?.id || ''),
+        name: String(first?.name || 'Default'),
         body: String(first?.body || defaultMessageTemplate()),
         delaySeconds: Number.parseInt(first?.delay_seconds || '10', 10) || 10,
     };
+}
+
+function loadTemplateOptions() {
+    const templates = readJson(templatesFile, [])
+        .filter((template) => String(template.body || '').trim() !== '')
+        .map((template) => ({
+            id: String(template.id || ''),
+            name: String(template.name || 'Untitled Template'),
+            body: String(template.body || ''),
+            delaySeconds: Number.parseInt(template.delay_seconds || '10', 10) || 10,
+        }));
+
+    if (templates.length > 0) {
+        return templates;
+    }
+
+    return [getDefaultTemplate()];
+}
+
+function makeTemplateKeyboard(templates) {
+    const rows = templates.slice(0, 48).map((template, index) => ([{
+        text: template.name.slice(0, 60),
+        callback_data: `tpl:${index}`,
+    }]));
+
+    rows.push([{ text: 'Use default template', callback_data: 'tpl:default' }]);
+    return rows;
 }
 
 function renderMessage(template, lead) {
@@ -144,6 +174,13 @@ function renderMessage(template, lead) {
         .split(/\r?\n/)
         .filter((line) => line.trim() !== 'Saya jumpa iklan ini:' || lead.ad_link)
         .join('\n');
+}
+
+function splitMessageParts(message) {
+    return String(message || '')
+        .split(/^\s*---\s*$/m)
+        .map((part) => part.trim())
+        .filter(Boolean);
 }
 
 function parseLeadFromMessage(message) {
@@ -202,6 +239,7 @@ function createSession(chatId) {
         phone: '',
         adLink: '',
         company: '',
+        templates: [],
     };
     sessions.set(String(chatId), session);
     return session;
@@ -247,6 +285,18 @@ async function askName(chatId) {
     });
 }
 
+async function askTemplate(chatId, session) {
+    session.step = 'template';
+    session.templates = loadTemplateOptions();
+    await requestJson('sendMessage', {
+        chat_id: chatId,
+        text: 'Select message template.',
+        reply_markup: {
+            inline_keyboard: makeTemplateKeyboard(session.templates),
+        },
+    });
+}
+
 function findDuplicate(leads, phone, adLink) {
     return leads.find((lead) => {
         const samePhone = phone && lead.phone === phone;
@@ -255,13 +305,19 @@ function findDuplicate(leads, phone, adLink) {
     });
 }
 
-function saveLead(parsed, chatId) {
+function saveLead(parsed, chatId, selectedTemplate = null) {
     const leads = readJson(leadsFile, []);
     const existing = findDuplicate(leads, parsed.phone, parsed.adLink);
-    const template = getDefaultTemplate();
+    const template = selectedTemplate || getDefaultTemplate();
     const now = new Date().toISOString();
 
     if (existing) {
+        if (selectedTemplate) {
+            existing.message_template = selectedTemplate.body;
+            existing.message_delay_seconds = selectedTemplate.delaySeconds;
+            existing.updated_at = now;
+            writeJson(leadsFile, leads);
+        }
         return { lead: existing, created: false };
     }
 
@@ -288,7 +344,11 @@ function saveLead(parsed, chatId) {
     return { lead, created: true };
 }
 
-function updateLeadStatus(leadId, sendStatus) {
+function findLeadById(leadId) {
+    return readJson(leadsFile, []).find((lead) => lead.id === leadId) || null;
+}
+
+function updateLeadStatus(leadId, sendStatus, error = '') {
     const leads = readJson(leadsFile, []);
     const now = new Date().toISOString();
     let updated = false;
@@ -298,7 +358,7 @@ function updateLeadStatus(leadId, sendStatus) {
             continue;
         }
         lead.whatsapp_send_status = sendStatus;
-        lead.whatsapp_send_error = '';
+        lead.whatsapp_send_error = sendStatus === 'failed' ? error : '';
         lead.updated_at = now;
         if (sendStatus === 'sent') {
             lead.status = 'WhatsApp Sent';
@@ -319,6 +379,71 @@ function buildWhatsappUrl(lead) {
     return `https://wa.me/${encodeURIComponent(lead.phone)}?text=${encodeURIComponent(message)}`;
 }
 
+function whatsappBridgeSend(payload) {
+    return new Promise((resolve, reject) => {
+        const body = JSON.stringify(payload);
+        const req = http.request({
+            hostname: '127.0.0.1',
+            port: whatsappBridgePort,
+            path: '/send',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+            },
+            timeout: 120000,
+        }, (res) => {
+            let response = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+                response += chunk;
+            });
+            res.on('end', () => {
+                try {
+                    const data = JSON.parse(response);
+                    if (!res.statusCode || res.statusCode >= 400 || data.ok !== true) {
+                        reject(new Error(data.error || `WhatsApp bridge returned ${res.statusCode}.`));
+                        return;
+                    }
+                    resolve(data);
+                } catch (error) {
+                    reject(new Error('Invalid WhatsApp bridge response.'));
+                }
+            });
+        });
+
+        req.on('timeout', () => req.destroy(new Error('WhatsApp bridge request timed out.')));
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+    });
+}
+
+async function sendLeadWhatsapp(leadId) {
+    const lead = findLeadById(leadId);
+    if (!lead) {
+        return { ok: false, error: 'Lead was not found.' };
+    }
+
+    const message = renderMessage(lead.message_template, lead);
+    const messages = splitMessageParts(message);
+
+    try {
+        const result = await whatsappBridgeSend({
+            phone: lead.phone,
+            message,
+            messages,
+            delaySeconds: lead.message_delay_seconds || 10,
+        });
+        updateLeadStatus(leadId, 'sent');
+        return { ok: true, sent: result.sent || messages.length || 1, lead };
+    } catch (error) {
+        const messageText = error.message || 'Could not send WhatsApp.';
+        updateLeadStatus(leadId, 'failed', messageText);
+        return { ok: false, error: messageText, lead };
+    }
+}
+
 async function sendLeadPrompt(chatId, parsed) {
     if (!/^60\d{8,11}$/.test(parsed.phone)) {
         await requestJson('sendMessage', {
@@ -335,12 +460,13 @@ async function sendLeadPrompt(chatId, parsed) {
         return;
     }
 
-    const { lead, created } = saveLead(parsed, chatId);
+    const { lead, created } = saveLead(parsed, chatId, parsed.template || null);
     const title = lead.company || 'Untitled lead';
     const reply = [
         `${created ? 'Saved' : 'Already saved'}: ${title}`,
         `Contact: ${lead.phone}`,
         lead.ad_link ? `Link: ${lead.ad_link}` : '',
+        parsed.template?.name ? `Template: ${parsed.template.name}` : '',
         '',
         'Send WhatsApp now?',
     ].filter(Boolean).join('\n');
@@ -350,20 +476,22 @@ async function sendLeadPrompt(chatId, parsed) {
         text: reply,
         reply_markup: {
             inline_keyboard: [[
-                { text: 'Send WhatsApp', url: buildWhatsappUrl(lead) },
+                { text: 'Send WhatsApp', callback_data: `sendwa:${lead.id}` },
                 { text: 'Mark Sent', callback_data: `sent:${lead.id}` },
             ], [
+                { text: 'Open WhatsApp', url: buildWhatsappUrl(lead) },
                 { text: 'Open LeadTracker', url: appUrl },
             ]],
         },
     });
 }
 
-async function finishLeadSession(chatId, session) {
+async function finishLeadSession(chatId, session, template = null) {
     const parsed = {
         company: session.company,
         phone: session.phone,
         adLink: session.adLink,
+        template,
     };
     clearSession(chatId);
     await sendLeadPrompt(chatId, parsed);
@@ -412,7 +540,7 @@ async function handleLeadStep(message) {
 
     if (session.step === 'company') {
         session.company = text;
-        await finishLeadSession(chatId, session);
+        await askTemplate(chatId, session);
     }
 }
 
@@ -428,6 +556,7 @@ async function handleUpdate(update) {
                     '1. Phone number',
                     '2. Ads link, optional',
                     '3. Name, optional',
+                    '4. Message template',
                 ].join('\n'),
             });
             await askPhone(update.message.chat.id);
@@ -459,7 +588,53 @@ async function handleUpdate(update) {
                 callback_query_id: update.callback_query.id,
                 text: 'Name skipped.',
             });
-            await finishLeadSession(chatId, session);
+            await askTemplate(chatId, session);
+            return;
+        }
+
+        if (data.startsWith('tpl:') && session?.step === 'template') {
+            const selected = data === 'tpl:default'
+                ? getDefaultTemplate()
+                : session.templates[Number.parseInt(data.slice(4), 10)];
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: selected ? `Selected ${selected.name}` : 'Using default template.',
+            });
+            await finishLeadSession(chatId, session, selected || getDefaultTemplate());
+            return;
+        }
+
+        const sendWhatsappMatch = data.match(/^sendwa:([a-f0-9]{16})$/);
+        if (sendWhatsappMatch) {
+            await requestJson('answerCallbackQuery', {
+                callback_query_id: update.callback_query.id,
+                text: 'Sending WhatsApp from LeadTracker...',
+            });
+            const result = await sendLeadWhatsapp(sendWhatsappMatch[1]);
+            if (result.ok) {
+                await requestJson('sendMessage', {
+                    chat_id: chatId,
+                    text: `Sent ${result.sent} WhatsApp message${result.sent === 1 ? '' : 's'} and updated LeadTracker.`,
+                });
+                await requestJson('editMessageReplyMarkup', {
+                    chat_id: update.callback_query.message.chat.id,
+                    message_id: update.callback_query.message.message_id,
+                    reply_markup: { inline_keyboard: [] },
+                });
+            } else {
+                await requestJson('sendMessage', {
+                    chat_id: chatId,
+                    text: `WhatsApp failed: ${result.error}`,
+                    reply_markup: result.lead ? {
+                        inline_keyboard: [[
+                            { text: 'Try Send WhatsApp Again', callback_data: `sendwa:${result.lead.id}` },
+                        ], [
+                            { text: 'Open WhatsApp', url: buildWhatsappUrl(result.lead) },
+                            { text: 'Open LeadTracker', url: appUrl },
+                        ]],
+                    } : undefined,
+                });
+            }
             return;
         }
 
