@@ -265,7 +265,8 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
         <a class="navbar-brand fw-bold" href="index.php"><?= htmlspecialchars($appName) ?></a>
         <div class="d-flex align-items-center gap-2 small text-secondary">
             <span><?= count($leads) ?> saved</span>
-            <a class="btn btn-outline-success btn-sm" href="https://web.whatsapp.com/" target="_blank" rel="noopener">Open WhatsApp QR</a>
+            <span class="connection-dot" id="waConnectionDot"></span>
+            <span id="waConnectionText">WhatsApp bridge offline</span>
         </div>
     </div>
 </nav>
@@ -288,9 +289,25 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
 
     <div class="row g-4 align-items-start">
         <section class="col-12 col-xl-4">
+            <div class="panel mb-4">
+                <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+                    <div>
+                        <h1 class="h5 mb-1">WhatsApp QR</h1>
+                        <p class="text-secondary small mb-0" id="waStatusText">Start the bridge, then scan the QR here.</p>
+                    </div>
+                    <button class="btn btn-outline-primary btn-sm" type="button" id="waRefreshButton">Refresh</button>
+                </div>
+                <div class="qr-box" id="waQrBox">
+                    <div class="text-secondary small text-center px-3">Run <code>start-whatsapp-bridge.bat</code> to show the QR.</div>
+                </div>
+                <div class="small text-secondary mt-3">
+                    Connected number: <span id="waConnectedNumber">-</span>
+                </div>
+            </div>
+
             <div class="panel">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h1 class="h4 mb-0"><?= $editing ? 'Edit Lead' : 'Add Lead' ?></h1>
+                    <h2 class="h4 mb-0"><?= $editing ? 'Edit Lead' : 'Add Lead' ?></h2>
                     <?php if ($editing): ?>
                         <a class="btn btn-outline-secondary btn-sm" href="index.php">Cancel</a>
                     <?php endif; ?>
@@ -394,7 +411,7 @@ $sources = ['Mudah.my', 'Carousell', 'Facebook Marketplace', 'Other'];
                             </div>
 
                             <div class="actions">
-                                <button class="btn btn-success" type="button" data-send-whatsapp="<?= htmlspecialchars($waUrl) ?>" data-lead-id="<?= htmlspecialchars((string)$lead['id']) ?>">Send WhatsApp</button>
+                                <button class="btn btn-success" type="button" data-send-whatsapp="<?= htmlspecialchars($waUrl) ?>" data-lead-id="<?= htmlspecialchars((string)$lead['id']) ?>" data-phone="<?= htmlspecialchars((string)$lead['phone']) ?>" data-message="<?= htmlspecialchars($message) ?>">Send WhatsApp</button>
                                 <button class="btn btn-outline-secondary" type="button" data-template="<?= htmlspecialchars($message) ?>">Copy Template</button>
                                 <a class="btn btn-outline-primary" href="index.php?edit=<?= urlencode((string)$lead['id']) ?>">Edit</a>
                                 <form method="post" onsubmit="return confirm('Delete this lead?');">

@@ -17,6 +17,22 @@ body {
     letter-spacing: 0;
 }
 
+.connection-dot {
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+    background: #b8c0cc;
+    display: inline-block;
+}
+
+.connection-dot.ready {
+    background: #15803d;
+}
+
+.connection-dot.waiting {
+    background: #d97706;
+}
+
 .panel,
 .toolbar,
 .empty-state,
@@ -46,6 +62,22 @@ body {
 
 .lead-card {
     padding: 1rem;
+}
+
+.qr-box {
+    min-height: 250px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: #fbfcfd;
+    overflow: hidden;
+}
+
+.qr-box img {
+    width: min(100%, 320px);
+    height: auto;
+    display: block;
 }
 
 .status-badge {
