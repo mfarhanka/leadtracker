@@ -464,6 +464,7 @@ async function sendLeadPrompt(chatId, parsed) {
     const title = lead.company || 'Untitled lead';
     const reply = [
         `${created ? 'Saved' : 'Already saved'}: ${title}`,
+        `LeadTracker ID: ${lead.id}`,
         `Contact: ${lead.phone}`,
         lead.ad_link ? `Link: ${lead.ad_link}` : '',
         parsed.template?.name ? `Template: ${parsed.template.name}` : '',

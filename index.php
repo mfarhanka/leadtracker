@@ -553,7 +553,11 @@ $filteredLeads = array_values(array_filter($leads, static function (array $lead)
     return str_contains($haystack, strtolower($query));
 }));
 
-usort($filteredLeads, static fn (array $a, array $b): int => strcmp((string)($b['updated_at'] ?? ''), (string)($a['updated_at'] ?? '')));
+usort($filteredLeads, static function (array $a, array $b): int {
+    $aTime = strtotime((string)($a['updated_at'] ?? '')) ?: 0;
+    $bTime = strtotime((string)($b['updated_at'] ?? '')) ?: 0;
+    return $bTime <=> $aTime;
+});
 
 $form = [
     'id' => $editing['id'] ?? ($_POST['id'] ?? ''),
