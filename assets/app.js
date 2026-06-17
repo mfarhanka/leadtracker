@@ -44,6 +44,13 @@ function normalizePhone(value) {
     return digits;
 }
 
+function splitMessageParts(message) {
+    return String(message || '')
+        .split(/^\s*---\s*$/m)
+        .map((part) => part.trim())
+        .filter(Boolean);
+}
+
 if (phoneInput) {
     phoneInput.addEventListener('blur', () => {
         phoneInput.value = normalizePhone(phoneInput.value);
@@ -152,14 +159,18 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
         const leadId = button.getAttribute('data-lead-id') || '';
         const phone = button.getAttribute('data-phone') || '';
         const message = button.getAttribute('data-message') || '';
+        const messages = splitMessageParts(message);
         const delaySeconds = Number.parseInt(button.getAttribute('data-delay-seconds') || '3', 10);
 
         button.disabled = true;
-        button.textContent = 'Sending...';
+        button.textContent = messages.length > 1 ? `Sending 1/${messages.length}...` : 'Sending...';
 
         if (!waReady) {
-            window.open(fallbackUrl, '_blank', 'noopener');
-            await markLeadSent(leadId);
+            if (messages.length === 1) {
+                window.open(fallbackUrl, '_blank', 'noopener');
+            }
+            await updateLeadWhatsappStatus(leadId, 'failed', 'WhatsApp bridge is required for separate message sending.');
+            showToast('WhatsApp bridge is required to send separate messages.');
             button.disabled = false;
             button.textContent = 'Send WhatsApp';
             return;
@@ -172,6 +183,7 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
                 body: JSON.stringify({
                     phone,
                     message,
+                    messages,
                     delaySeconds: Number.isFinite(delaySeconds) ? delaySeconds : 3,
                 }),
             });
@@ -179,12 +191,18 @@ document.querySelectorAll('[data-send-whatsapp]').forEach((button) => {
             if (!response.ok || !payload.ok) {
                 throw new Error(payload.error || 'Could not send WhatsApp.');
             }
-            await markLeadSent(leadId);
-            showToast('WhatsApp sent from LeadTracker.');
+            await updateLeadWhatsappStatus(leadId, 'sent');
+            const sentCount = payload.sent || messages.length || 1;
+            showToast(`Sent ${sentCount} WhatsApp message${sentCount === 1 ? '' : 's'} from LeadTracker.`);
             window.setTimeout(() => window.location.reload(), 700);
         } catch (error) {
-            showToast(error.message || 'WhatsApp bridge failed. Opening WhatsApp Web.');
-            window.open(fallbackUrl, '_blank', 'noopener');
+            const message = error.message || 'WhatsApp bridge failed.';
+            await updateLeadWhatsappStatus(leadId, 'failed', message);
+            showToast(message);
+            if (messages.length === 1) {
+                window.open(fallbackUrl, '_blank', 'noopener');
+            }
+            window.setTimeout(() => window.location.reload(), 700);
         } finally {
             button.disabled = false;
             button.textContent = 'Send WhatsApp';
@@ -207,8 +225,17 @@ document.querySelectorAll('[data-delete-lead]').forEach((button) => {
     });
 });
 
-async function markLeadSent(leadId) {
-    const body = new URLSearchParams({ action: 'mark_sent', id: leadId });
+async function updateLeadWhatsappStatus(leadId, sendStatus, error = '') {
+    if (!leadId) {
+        return;
+    }
+
+    const body = new URLSearchParams({
+        action: 'update_whatsapp_status',
+        id: leadId,
+        send_status: sendStatus,
+        error,
+    });
     await fetch('index.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

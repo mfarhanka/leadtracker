@@ -155,6 +155,19 @@ function split_message_parts(string $message): array
     return array_values(array_filter(array_map('trim', $parts), static fn (string $part): bool => $part !== ''));
 }
 
+function normalize_message_parts($messages, string $fallbackMessage): array
+{
+    if (is_array($messages)) {
+        $parts = array_map(static fn ($message): string => trim((string)$message), $messages);
+        $parts = array_values(array_filter($parts, static fn (string $message): bool => $message !== ''));
+        if ($parts !== []) {
+            return $parts;
+        }
+    }
+
+    return split_message_parts($fallbackMessage);
+}
+
 function normalize_delay_seconds($value): int
 {
     $delay = filter_var($value, FILTER_VALIDATE_INT, [
@@ -166,6 +179,22 @@ function normalize_delay_seconds($value): int
     ]);
 
     return is_int($delay) ? $delay : 3;
+}
+
+function normalize_whatsapp_send_status(string $status): string
+{
+    $allowed = ['not_sent', 'sent', 'opened', 'failed'];
+    return in_array($status, $allowed, true) ? $status : 'not_sent';
+}
+
+function whatsapp_send_status_label(string $status): string
+{
+    return match (normalize_whatsapp_send_status($status)) {
+        'sent' => 'WhatsApp Sent',
+        'opened' => 'WhatsApp Opened',
+        'failed' => 'WhatsApp Failed',
+        default => 'WhatsApp Not Sent',
+    };
 }
 
 function find_duplicate(array $leads, string $phone, string $adLink, ?string $ignoreId = null): ?array
@@ -190,8 +219,9 @@ function bridge_request(string $path, string $method = 'GET', ?array $payload = 
 {
     $url = 'http://127.0.0.1:3030' . $path;
     $timeout = 8;
-    if ($payload !== null && isset($payload['message'])) {
-        $messageCount = max(1, count(split_message_parts((string)$payload['message'])));
+    if ($payload !== null && (isset($payload['messages']) || isset($payload['message']))) {
+        $messages = normalize_message_parts($payload['messages'] ?? null, (string)($payload['message'] ?? ''));
+        $messageCount = max(1, count($messages));
         $delaySeconds = normalize_delay_seconds($payload['delaySeconds'] ?? 3);
         $timeout += (($messageCount - 1) * $delaySeconds) + 5;
     }
@@ -251,9 +281,13 @@ if (isset($_GET['api'])) {
             exit;
         }
 
+        $message = (string)($payload['message'] ?? '');
+        $messages = normalize_message_parts($payload['messages'] ?? null, $message);
+
         $result = bridge_request('/send', 'POST', [
             'phone' => normalize_phone((string)($payload['phone'] ?? '')),
-            'message' => (string)($payload['message'] ?? ''),
+            'message' => $message,
+            'messages' => $messages,
             'delaySeconds' => normalize_delay_seconds($payload['delaySeconds'] ?? 3),
         ]);
 
@@ -339,6 +373,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         foreach ($leads as $index => $lead) {
             if (($lead['id'] ?? '') === $id) {
                 $leads[$index]['status'] = 'WhatsApp Sent';
+                $leads[$index]['whatsapp_send_status'] = 'sent';
+                $leads[$index]['whatsapp_send_error'] = '';
+                $leads[$index]['whatsapp_sent_at'] = date('c');
+                $leads[$index]['updated_at'] = date('c');
+                break;
+            }
+        }
+
+        save_leads($dataFile, $leads);
+        header('Content-Type: application/json');
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
+    if ($action === 'update_whatsapp_status') {
+        $id = (string)($_POST['id'] ?? '');
+        $sendStatus = normalize_whatsapp_send_status((string)($_POST['send_status'] ?? 'not_sent'));
+        $error = trim((string)($_POST['error'] ?? ''));
+        foreach ($leads as $index => $lead) {
+            if (($lead['id'] ?? '') === $id) {
+                $leads[$index]['whatsapp_send_status'] = $sendStatus;
+                $leads[$index]['whatsapp_send_error'] = $sendStatus === 'failed' ? $error : '';
+                $leads[$index]['whatsapp_sent_at'] = $sendStatus === 'sent' ? date('c') : ($lead['whatsapp_sent_at'] ?? '');
+                if ($sendStatus === 'sent') {
+                    $leads[$index]['status'] = 'WhatsApp Sent';
+                }
                 $leads[$index]['updated_at'] = date('c');
                 break;
             }
@@ -387,6 +447,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'notes' => $notes,
                 'message_template' => $messageTemplate !== '' ? $messageTemplate : default_message_template(),
                 'message_delay_seconds' => $messageDelaySeconds,
+                'whatsapp_send_status' => 'not_sent',
+                'whatsapp_send_error' => '',
+                'whatsapp_sent_at' => '',
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
@@ -395,6 +458,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach ($leads as $index => $existing) {
                 if (($existing['id'] ?? '') === $lead['id']) {
                     $lead['created_at'] = $existing['created_at'] ?? $now;
+                    $lead['whatsapp_send_status'] = normalize_whatsapp_send_status((string)($existing['whatsapp_send_status'] ?? 'not_sent'));
+                    $lead['whatsapp_send_error'] = (string)($existing['whatsapp_send_error'] ?? '');
+                    $lead['whatsapp_sent_at'] = (string)($existing['whatsapp_sent_at'] ?? '');
                     $leads[$index] = $lead;
                     $updated = true;
                     break;
@@ -491,7 +557,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= htmlspecialchars($appName) ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="assets/app.css?v=3" rel="stylesheet">
+    <link href="assets/app.css?v=4" rel="stylesheet">
 </head>
 <body>
 <nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top">
@@ -587,6 +653,9 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                     $phone = (string)($lead['phone'] ?? '');
                     $adLink = (string)($lead['ad_link'] ?? '');
                     $companyName = trim((string)($lead['company'] ?? '')) !== '' ? (string)$lead['company'] : 'Untitled lead';
+                    $whatsappSendStatus = normalize_whatsapp_send_status((string)($lead['whatsapp_send_status'] ?? 'not_sent'));
+                    $whatsappSendLabel = whatsapp_send_status_label($whatsappSendStatus);
+                    $whatsappSendError = trim((string)($lead['whatsapp_send_error'] ?? ''));
                     $waUrl = 'https://web.whatsapp.com/send?phone=' . rawurlencode($phone) . '&text=' . rawurlencode($message);
                     ?>
                     <article class="lead-card">
@@ -611,6 +680,7 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
                                     <?php if (count($messageParts) > 1): ?>
                                         &middot; <?= $messageDelaySeconds ?>s apart
                                     <?php endif; ?>
+                                    &middot; <span class="wa-send-status wa-send-status-<?= htmlspecialchars($whatsappSendStatus) ?>" title="<?= htmlspecialchars($whatsappSendError) ?>"><?= htmlspecialchars($whatsappSendLabel) ?></span>
                                 </div>
                             </div>
 
@@ -874,6 +944,6 @@ $activeFilterCount = ($query !== '' ? 1 : 0) + ($statusFilter !== '' ? 1 : 0);
         'delay_seconds' => normalize_delay_seconds($template['delay_seconds'] ?? 3),
     ];
 }, $templates), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES) ?></script>
-<script src="assets/app.js?v=5"></script>
+<script src="assets/app.js?v=6"></script>
 </body>
 </html>

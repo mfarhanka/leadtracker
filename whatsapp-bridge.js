@@ -103,6 +103,19 @@ function splitMessageParts(message) {
         .filter(Boolean);
 }
 
+function normalizeMessageParts(messages, fallbackMessage) {
+    if (Array.isArray(messages)) {
+        const parts = messages
+            .map((message) => String(message || '').trim())
+            .filter(Boolean);
+        if (parts.length > 0) {
+            return parts;
+        }
+    }
+
+    return splitMessageParts(fallbackMessage);
+}
+
 function normalizeDelaySeconds(value) {
     const delay = Number.parseInt(value, 10);
     if (!Number.isFinite(delay)) {
@@ -133,7 +146,7 @@ app.post('/send', async (req, res) => {
     }
 
     const phone = normalizePhone(req.body.phone);
-    const messages = splitMessageParts(req.body.message);
+    const messages = normalizeMessageParts(req.body.messages, req.body.message);
     const delaySeconds = normalizeDelaySeconds(req.body.delaySeconds);
 
     if (!/^60\d{8,11}$/.test(phone)) {
